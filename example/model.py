@@ -44,7 +44,7 @@ def scripted_llm(step: int, corrections: list[str]) -> dict:
             tool_call("add_credit", customer_id=CUSTOMER, amount_cents=300000),
         )
 
-    if ask_before_cancel:
+    if step >= 3 and ask_before_cancel:
         text = "We've added a $200 credit."
         if already_refunded:
             text += " Your $240 refund is already on its way."

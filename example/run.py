@@ -37,10 +37,10 @@ def dollars(cents: int) -> str:
 
 
 def show_customer() -> None:
-    c = billing.get(billing.CUSTOMER)
-    credit = dollars(c["balance_cents"])
-    refunded = dollars(c["refunded_cents"])
-    print(f"  billing: credit {credit} · cancelled {c['cancelled']} · refunded {refunded}\n")
+    customer = billing.get(billing.CUSTOMER)
+    credit = dollars(customer["balance_cents"])
+    refunded = dollars(customer["refunded_cents"])
+    print(f"  billing: credit {credit} · cancelled {customer['cancelled']} · refunded {refunded}\n")
 
 
 def show_effects(title: str, effects: list) -> None:
@@ -53,7 +53,7 @@ def run_url(run_id: str) -> str:
 
 
 async def demo(client: Client) -> None:
-    billing.reset()
+    billing.seed()
     rewind.Ledger().clear()
 
     # 1. Run the agent
@@ -87,9 +87,9 @@ async def demo(client: Client) -> None:
     show_effects("undone", result.undone)
     show_effects("flagged (the agent is told)", result.flagged)
 
-    print("  the agent re-runs from step 2:")
-    new_run = client.get_workflow_handle(WORKFLOW_ID, run_id=result.rewound_run_id)
-    reply = await new_run.result()
+    print(f"  the agent re-runs from step {STEP}:")
+    rewound_run = client.get_workflow_handle(WORKFLOW_ID, run_id=result.rewound_run_id)
+    reply = await rewound_run.result()
     print(f"  reply: {reply}")
     show_customer()
 

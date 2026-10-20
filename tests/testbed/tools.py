@@ -27,8 +27,9 @@ def _usd(cents: int) -> str:
 @rewind.read_only
 def lookup_customer(customer_id: str) -> dict:
     stripe = FakeStripe()
-    customer, sub, charges = stripe.retrieve_customer(customer_id), _subscription(customer_id), \
-        stripe.list_charges(customer_id)
+    customer = stripe.retrieve_customer(customer_id)
+    sub = _subscription(customer_id)
+    charges = stripe.list_charges(customer_id)
     return {"customer_id": customer_id, "name": customer["name"], "balance_cents": customer["balance_cents"],
             "plan_cents": sub["amount_cents"], "discount_pct": sub["discount_pct"],
             "cancel_at_period_end": sub["cancel_at_period_end"], "status": sub["status"],

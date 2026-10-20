@@ -97,6 +97,7 @@ def _already_done(corrections: list[str]) -> set[str]:
         if line.startswith("Already done and NOT undone"):
             inside = True
         elif inside and line.startswith("- "):
+            # "- refund $240 to cus_4417 (irreversible)" or "- refund(customer_id=...)" -> "refund"
             done.add(line[2:].split()[0].split("(")[0])
         elif not line.strip():
             inside = False
@@ -105,9 +106,10 @@ def _already_done(corrections: list[str]) -> set[str]:
 
 def decide(policy: str, ticket: dict, step: int, corrections: list[str]) -> dict:
     steps = script(ticket, policy, corrections)
-    s = steps[min(step, len(steps)) - 1]
+    this_step = dict(steps[min(step, len(steps)) - 1])
     skip = _already_done(corrections) - {"send_reply"}
-    return {**s, "tool_calls": [c for c in s["tool_calls"] if c["name"] not in skip]}
+    this_step["tool_calls"] = [c for c in this_step["tool_calls"] if c["name"] not in skip]
+    return this_step
 
 
 @activity.defn

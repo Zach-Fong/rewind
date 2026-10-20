@@ -16,14 +16,15 @@ from temporalio import activity
 from temporalio.api.common.v1 import WorkflowExecution
 from temporalio.api.enums.v1 import ResetReapplyExcludeType
 from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
+from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 
-from rewind import client as rewind_client
 from rewind import tools
 from rewind.ledger import Effect, Ledger
+from rewind.plan import RewindError, preview
 from rewind.workflow import undo_activity_name
 
-DRIFTED = "drifted"
+DRIFTED_REASON = "drifted"
 
 
 def tool_activity(tool: tools.Tool):
@@ -33,8 +34,10 @@ def tool_activity(tool: tools.Tool):
         info = activity.info()
         key = f"{info.workflow_id}:{info.workflow_run_id}:{info.activity_id}"
         # Tools are blocking calls; a thread keeps the worker's event loop free.
-        return await asyncio.to_thread(tools.run_and_record, tool.name, args, step=step, workflow_id=info.workflow_id,
-                                       first_run_id=first_run_id, run_id=info.workflow_run_id, key=key)
+        return await asyncio.to_thread(
+            tools.run_and_record, tool.name, args,
+            step=step, workflow_id=info.workflow_id, first_run_id=first_run_id, run_id=info.workflow_run_id, key=key,
+        )
     return run_tool
 
 
@@ -44,6 +47,22 @@ def undo_activity(tool: tools.Tool):
     async def undo_effect(effect_id: str) -> dict:
         return await asyncio.to_thread(_check_and_undo, effect_id)
     return undo_effect
+
+
+def _check_and_undo(effect_id: str) -> dict:
+    """Undo one effect, or flag it if it has drifted. Returns the effect afterwards, as a dict.
+
+    Safe to retry: the row is `reverting` while the undo runs, so a retry runs the undo again under the same undo key
+    instead of checking a world the first attempt already changed. Effects in any other status are left alone."""
+    ledger = Ledger()
+    effect = ledger.get_effect(effect_id)
+    if effect.status == "done" and tools.has_drifted(effect):
+        ledger.mark_flagged(effect_id, DRIFTED_REASON)
+    elif effect.status in ("done", "reverting"):
+        ledger.mark_reverting(effect_id)
+        tools.undo(effect)
+        ledger.mark_reverted(effect_id)
+    return dataclasses.asdict(ledger.get_effect(effect_id))
 
 
 def tool_activities() -> list:
@@ -58,64 +77,63 @@ def tool_activities() -> list:
     return result
 
 
-@activity.defn(name="rewind.plan")
-async def plan(workflow_id: str, step: int) -> dict:
+@activity.defn(name="rewind.preview")
+async def preview_activity(workflow_id: str, step: int) -> dict:
+    """`rewind.preview()`, run on the worker as the rewind's first step. A refusal fails the rewind without retrying."""
     try:
-        return (await rewind_client.preview(activity.client(), workflow_id, step)).to_dict()
-    except rewind_client.RewindError as e:
+        plan = await preview(activity.client(), workflow_id, step)
+    except RewindError as e:
         raise ApplicationError(str(e), type="RewindError", non_retryable=True) from e
-
-
-def _check_and_undo(effect_id: str) -> dict:
-    """Undo one effect if the world still matches it, else flag it. Returns the effect afterwards. Idempotent: the
-    row is `reverting` while the undo runs, so a retry re-runs the undo under its key (`undo:{effect_id}`) instead of
-    checking a world the first attempt already changed. Anything else is left as it is."""
-    ledger = Ledger()
-    effect = ledger.get_effect(effect_id)
-    if effect.status == "done" and not tools.world_unchanged_since(effect):
-        ledger.mark_flagged(effect_id, DRIFTED)
-    elif effect.status in ("done", "reverting"):
-        ledger.mark_reverting(effect_id)
-        tools.undo(effect)
-        ledger.mark_reverted(effect_id)
-    return dataclasses.asdict(ledger.get_effect(effect_id))
+    return plan.to_dict()
 
 
 @activity.defn(name="rewind.reset_agent")
 async def reset_agent(rewind_id: str, plan: dict, correction: str) -> dict:
-    """Save the correction, then reset the agent workflow to the plan's step. Safe to retry: the correction is saved
-    once per rewind, and if an earlier attempt already reset the planned run, its rewound run is returned instead of
-    resetting again."""
-    workflow_id, first_run_id, step = plan["workflow_id"], plan["first_run_id"], plan["step"]
+    """Save the correction, then reset the agent workflow to the plan's reset point. `plan` is `Plan.to_dict()`.
+    Safe to retry: the correction is saved once per rewind, and the reset happens once."""
     client = activity.client()
-    planned = await client.get_workflow_handle(workflow_id, run_id=plan["run_id"]).describe()
-    rewound_run_id = planned.raw_description.workflow_extended_info.reset_run_id
+    workflow_id, run_id, first_run_id, step = plan["workflow_id"], plan["run_id"], plan["first_run_id"], plan["step"]
+
+    # An earlier attempt may have reset already: Temporal records the run it made on the planned run.
+    planned_run = await client.get_workflow_handle(workflow_id, run_id=run_id).describe()
+    rewound_run_id = planned_run.raw_description.workflow_extended_info.reset_run_id
     if not rewound_run_id:
         latest_run_id = (await client.get_workflow_handle(workflow_id).describe()).run_id
-        if latest_run_id != plan["run_id"]:
+        if latest_run_id != run_id:
             raise ApplicationError(f"{workflow_id} has a newer run ({latest_run_id}) than the one this rewind planned "
                                    "on, so it wasn't reset", type="RewindError", non_retryable=True)
 
+    # Save the correction before the reset: the rewound run starts at once, and its step `step` model call must find
+    # it. Saving it again on a retry changes nothing.
     ledger = Ledger()
     flagged = await asyncio.to_thread(ledger.list_effects, workflow_id, first_run_id, from_step=step,
                                       status="flagged")
     text = correction_with_flagged(correction, flagged)
-    # Before the reset: the new run starts at once, and its step `step` model call must find the correction.
     await asyncio.to_thread(ledger.add_correction, rewind_id, workflow_id, first_run_id, step, text)
 
     if not rewound_run_id:
-        response = await client.workflow_service.reset_workflow_execution(ResetWorkflowExecutionRequest(
-            namespace=client.namespace,
-            workflow_execution=WorkflowExecution(workflow_id=workflow_id, run_id=plan["run_id"]),
-            workflow_task_finish_event_id=plan["reset_event_id"],
-            reason=f"rewind to step {step}: {correction}"[:1000],
-            request_id=str(uuid.uuid4()),
-            # The old run's later signals and updates belong to the timeline being thrown away.
-            reset_reapply_exclude_types=[ResetReapplyExcludeType.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL,
-                                         ResetReapplyExcludeType.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE]))
-        rewound_run_id = response.run_id
-    return {"rewound_run_id": rewound_run_id, "flagged": [dataclasses.asdict(e) for e in flagged],
-            "correction": text}
+        rewound_run_id = await _reset(client, plan, correction)
+
+    return {
+        "rewound_run_id": rewound_run_id,
+        "flagged": [dataclasses.asdict(e) for e in flagged],
+        "correction": text,
+    }
+
+
+async def _reset(client: Client, plan: dict, correction: str) -> str:
+    """Reset the agent workflow to the plan's reset point. Returns the rewound run's ID."""
+    response = await client.workflow_service.reset_workflow_execution(ResetWorkflowExecutionRequest(
+        namespace=client.namespace,
+        workflow_execution=WorkflowExecution(workflow_id=plan["workflow_id"], run_id=plan["run_id"]),
+        workflow_task_finish_event_id=plan["reset_event_id"],
+        reason=f"rewind to step {plan['step']}: {correction}"[:1000],  # the correction can be any length
+        request_id=str(uuid.uuid4()),
+        # The old run's later signals and updates belong to the timeline being thrown away.
+        reset_reapply_exclude_types=[ResetReapplyExcludeType.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL,
+                                     ResetReapplyExcludeType.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE],
+    ))
+    return response.run_id
 
 
 def correction_with_flagged(correction: str, flagged: list[Effect]) -> str:
@@ -123,8 +141,8 @@ def correction_with_flagged(correction: str, flagged: list[Effect]) -> str:
     if not flagged:
         return correction
     lines = [correction.rstrip(), "", "Already done and NOT undone; do not repeat:"]
-    for e in flagged:
-        lines.append(f"- {tools.get_tool(e.tool).describe_effect(e)} ({e.reason})")
+    for effect in flagged:
+        lines.append(f"- {tools.get_tool(effect.tool).describe_effect(effect)} ({effect.reason})")
     return "\n".join(lines)
 
 

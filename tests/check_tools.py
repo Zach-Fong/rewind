@@ -35,15 +35,15 @@ def call(name: str, args: dict, key: str, step: int = 1, run: str = "run-a") -> 
 def main() -> int:
     testbed.seed()
     led = rewind.Ledger()
-    s = FakeStripe()
+    stripe = FakeStripe()
 
     # fake Stripe idempotency (the semantics the key design depends on)
-    a = s.create_balance_transaction(HERO, 100, "x", idempotency_key="k1")
-    b = s.create_balance_transaction(HERO, 100, "x", idempotency_key="k1")
+    a = stripe.create_balance_transaction(HERO, 100, "x", idempotency_key="k1")
+    b = stripe.create_balance_transaction(HERO, 100, "x", idempotency_key="k1")
     check("stripe: same key + params replays, no second effect",
-          a == b and s.retrieve_customer(HERO)["balance_cents"] == 100)
+          a == b and stripe.retrieve_customer(HERO)["balance_cents"] == 100)
     try:
-        s.create_balance_transaction(HERO, 999, "x", idempotency_key="k1")
+        stripe.create_balance_transaction(HERO, 999, "x", idempotency_key="k1")
         check("stripe: same key + different params raises", False)
     except IdempotencyError:
         check("stripe: same key + different params raises", True)
@@ -63,12 +63,12 @@ def main() -> int:
     # retry with the same key: one row, one Stripe effect
     call("add_credit", {"customer_id": HERO, "amount_cents": 300000}, "wf-1:run-a:2", step=3)
     check("retry: one row, one Stripe effect",
-          len(led.list_effects("wf-1", FIRST)) == 1 and s.retrieve_customer(HERO)["balance_cents"] == 300000)
+          len(led.list_effects("wf-1", FIRST)) == 1 and stripe.retrieve_customer(HERO)["balance_cents"] == 300000)
 
     # a new key (a reset gives the same activity a new run ID): really executes
     call("add_credit", {"customer_id": HERO, "amount_cents": 300000}, "wf-1:run-b:2", step=3, run="run-b")
     check("a new key for the same call executes again",
-          len(led.list_effects("wf-1", FIRST)) == 2 and s.retrieve_customer(HERO)["balance_cents"] == 600000)
+          len(led.list_effects("wf-1", FIRST)) == 2 and stripe.retrieve_customer(HERO)["balance_cents"] == 600000)
 
     # undo round trip for each reversible tool, and drift detection
     testbed.seed()
@@ -80,21 +80,21 @@ def main() -> int:
         before = tools.get_tool(name).state(args)
         call(name, args, f"wf-1:run-a:{10 + i}")
         e = led.list_effects("wf-1", FIRST)[-1]
-        ok_unchanged = tools.world_unchanged_since(e)
+        drifted = tools.has_drifted(e)
         tools.undo(e)
         after_undo = tools.get_tool(name).state(args)
         check(f"{name}: drift check passes untouched, undo restores the before-state",
-              ok_unchanged and after_undo == before, f"{before} -> {after_undo}")
+              not drifted and after_undo == before, f"{before} -> {after_undo}")
 
     call("add_credit", {"customer_id": HERO, "amount_cents": 700}, "wf-1:run-a:20")
     e = led.list_effects("wf-1", FIRST)[-1]
-    s.tamper("customers", HERO, balance_cents=12345)
-    check("drift: a manual change is detected", not tools.world_unchanged_since(e))
+    stripe.tamper("customers", HERO, balance_cents=12345)
+    check("drift: a manual change is detected", tools.has_drifted(e))
 
-    r = call("send_reply", {"customer_id": HERO, "ticket_id": 4, "body": "later"}, "wf-1:run-a:21")
+    reply = call("send_reply", {"customer_id": HERO, "ticket_id": 4, "body": "later"}, "wf-1:run-a:21")
     e = led.list_effects("wf-1", FIRST)[-1]
-    outbox.deliver(r["message_id"])
-    check("drift: a reply that already went out can't be cancelled", not tools.world_unchanged_since(e))
+    outbox.deliver(reply["message_id"])
+    check("drift: a reply that already went out can't be cancelled", tools.has_drifted(e))
 
     # irreversible: recorded flagged
     call("refund", {"customer_id": HERO, "amount_cents": 24000}, "wf-1:run-a:22", step=4)
@@ -112,10 +112,10 @@ def main() -> int:
     call("add_note", {"text": "x"}, "wf-1:run-a:40")
     e = led.list_effects("wf-1", FIRST)[-1]
     notes.append("someone else's")
-    unchanged = tools.world_unchanged_since(e)
+    drifted = tools.has_drifted(e)
     tools.undo(e)
     check("reversible without state: recorded done, undone despite other changes",
-          e.status == "done" and e.before is None and unchanged and notes == ["someone else's"])
+          e.status == "done" and e.before is None and not drifted and notes == ["someone else's"])
 
     # failure and crash
     testbed.seed()
@@ -126,7 +126,7 @@ def main() -> int:
     [e] = led.list_effects("wf-1", FIRST)
     check("a tool that raises leaves a failed row", e.status == "failed", e.reason or "")
     for name, key in (("add_credit", "wf-1:run-a:31"), ("refund", "wf-1:run-a:32")):
-        with mock.patch.object(rewind.Ledger, "mark_done", side_effect=SystemExit("crash")):
+        with mock.patch.object(rewind.Ledger, "record_result", side_effect=SystemExit("crash")):
             try:
                 call(name, {"customer_id": HERO, "amount_cents": 100}, key)
             except SystemExit:
@@ -145,8 +145,8 @@ def main() -> int:
             pass
     retried = activities._check_and_undo(e.effect_id)
     check("undo retry after the undo took effect: reverted, undone once",
-          retried["status"] == "reverted" and s.retrieve_customer(HERO)["balance_cents"] == 0,
-          f"{retried['status']} {retried['reason']} balance={s.retrieve_customer(HERO)['balance_cents']}")
+          retried["status"] == "reverted" and stripe.retrieve_customer(HERO)["balance_cents"] == 0,
+          f"{retried['status']} {retried['reason']} balance={stripe.retrieve_customer(HERO)['balance_cents']}")
 
     # corrections apply from their step on
     led.add_correction("rw1", "wf-9", "run-a", 3, "A")

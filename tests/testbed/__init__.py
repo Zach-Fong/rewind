@@ -11,7 +11,7 @@ TASK_QUEUE = "support"
 
 
 def __getattr__(name: str):
-    # Lazy, like rewind/__init__: the workflow sandbox imports this package for testbed.agent.
+    # Built on access: ACTIVITIES lists the tools, so they must be registered first.
     if name not in ("WORKFLOWS", "ACTIVITIES"):
         raise AttributeError(name)
     import rewind

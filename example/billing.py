@@ -34,7 +34,7 @@ def _execute(sql: str, *params) -> None:
         conn.execute(sql, params)
 
 
-def reset() -> None:
+def seed() -> None:
     """One customer: Northwind Freight, $2,000/month, last charged $240."""
     with closing(_db()) as conn:
         conn.executescript(SCHEMA)

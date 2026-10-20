@@ -37,10 +37,10 @@ def _write() -> Iterator[sqlite3.Connection]:
 def schedule(ticket_id: int, customer_id: str, body: str, send_at: str, idempotency_key: str | None) -> str:
     """Returns the message ID. The same key returns the message it scheduled the first time."""
     with _write() as c:
-        existing = c.execute("SELECT id FROM outbox WHERE key=?", (idempotency_key,)).fetchone() \
-            if idempotency_key else None
-        if existing:
-            return existing["id"]
+        if idempotency_key:
+            existing = c.execute("SELECT id FROM outbox WHERE key=?", (idempotency_key,)).fetchone()
+            if existing:
+                return existing["id"]
         message_id = f"msg_{c.execute('SELECT COUNT(*) FROM outbox').fetchone()[0] + 1:03d}"
         c.execute("INSERT INTO outbox VALUES (?,?,?,?,?,?,?)",
                   (message_id, idempotency_key, ticket_id, customer_id, body, send_at, "scheduled"))

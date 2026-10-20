@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import rewind  # Rewind
 from example import billing
+from rewind.ledger import Effect
 
 
 @rewind.read_only  # Rewind
@@ -15,7 +16,7 @@ def _balance(args: dict) -> int:  # Rewind: the state add_credit changes
 
 
 # The fake billing has no idempotency keys, so these undos ignore `key`; tests/testbed/tools.py passes it on.
-def _undo_credit(effect, key: str) -> None:  # Rewind
+def _undo_credit(effect: Effect, key: str) -> None:  # Rewind
     billing.add_balance(effect.args["customer_id"], -effect.args["amount_cents"])
 
 
@@ -29,7 +30,7 @@ def _cancelled(args: dict) -> bool:  # Rewind: the state cancel_subscription cha
     return billing.get(args["customer_id"])["cancelled"]
 
 
-def _undo_cancel(effect, key: str) -> None:  # Rewind
+def _undo_cancel(effect: Effect, key: str) -> None:  # Rewind
     billing.set_cancelled(effect.args["customer_id"], effect.before)
 
 

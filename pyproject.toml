@@ -1,0 +1,19 @@
+[project]
+name = "rewind"
+version = "0.1.0"
+description = "Rewind for AI agents on Temporal: undo real-world effects from a step and re-run it with a correction"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Zach Fong" }]
+requires-python = ">=3.10"
+dependencies = ["temporalio==1.34.0"]
+
+[project.urls]
+Repository = "https://github.com/Zach-Fong/rewind"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rewind*"]

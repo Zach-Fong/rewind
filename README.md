@@ -37,10 +37,13 @@ world, and fixing it by hand means undoing each change and then redoing the work
 `example/` is a small support agent you can run in a minute. It makes a costly mistake, and the script rewinds it on
 a local Temporal server so you can see each part of a rewind.
 
+You need Python 3.10 or later. The script starts its own Temporal server, with the UI on http://localhost:8233, and
+keeps it running until you press Ctrl-C.
+
 ```
 git clone https://github.com/Zach-Fong/rewind.git && cd rewind
 python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python -m example.run          # Python 3.10+; starts its own Temporal server (UI on http://localhost:8233); Ctrl-C to stop
+.venv/bin/python -m example.run
 ```
 
 What happens:
@@ -57,7 +60,7 @@ In the Temporal UI you'll find the original and rewound runs (both under `suppor
 
 ## Using it in your agent
 
-Rewind wraps your agent's model and tool calls: the model call gets an ID a rewind can find, and each tool call is
+Rewind wraps your agent's model and tool calls. The model call gets an ID a rewind can find, and each tool call is
 recorded as an effect in Rewind's ledger. The ledger is a SQLite file at `REWIND_DB` (default `./rewind.db`), and the
 worker and the client must share it. The full before-and-after diff is in [`example/README.md`](example/README.md).
 
@@ -66,12 +69,12 @@ worker and the client must share it. The full before-and-after diff is in [`exam
 ```python
 import rewind
 
-@rewind.read_only          # changes nothing in the world; not recorded
+@rewind.read_only          # changes nothing in the world, so it isn't recorded
 def get_customer(customer_id): ...
 
 @rewind.reversible(
     undo=remove_credit,    # remove_credit(effect, key): reverses one add_credit call
-    state=read_balance,    # optional: read_balance(args); if the balance has drifted, a rewind flags it instead of undoing it
+    state=read_balance,    # optional. read_balance(args): if the balance has drifted, a rewind flags it instead of undoing it
 )
 def add_credit(customer_id, amount_cents): ...
 
@@ -119,11 +122,12 @@ Worker(client, task_queue="support", workflows=[SupportAgent, *rewind.WORKFLOWS]
 plan = await rewind.preview(client, "support-ticket-42", step=2)
 print(plan.to_undo)      # effects it will undo, newest first
 print(plan.drifted)      # drifted: will be flagged, not undone
-print(plan.flagged)      # irreversible or already flagged; the agent will be told
+print(plan.flagged)      # irreversible, or flagged by an earlier rewind. The agent will be told
 
 # Rewind: undo those effects, then rerun the agent from step 2 with the correction.
 result = await rewind.rewind(client, "support-ticket-42", step=2,
-                             correction="Max 10% credit.", task_queue="support")
+                             correction="Max 10% credit. Never cancel without asking.",
+                             task_queue="support")
 print(result.undone)           # effects undone
 print(result.flagged)          # flagged effects (irreversible, or drifted)
 print(result.rewound_run_id)   # the rewound run's ID (same workflow ID)
@@ -145,7 +149,7 @@ a fake Stripe, a fake outbox and a scripted model.
 
 The undo half is. Recording an undo for each change and running them in reverse is the saga pattern. What's different:
 
-- **A person triggers it after the run.** Nothing failed; a reviewer decided a step was wrong.
+- **A person triggers it after the run.** Nothing failed. A reviewer decided a step was wrong.
 - **It restores the agent, not just the world.** A saga leaves the world undone and the workflow over. Here the agent
   carries on from the chosen step with its earlier work intact.
 - **The rewound run isn't a retry.** It has a correction, so it makes a different decision.

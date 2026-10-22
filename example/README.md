@@ -64,8 +64,8 @@ activity for each reversible tool (`undo_add_credit`). In the Temporal UI they l
 **Each tool** swaps `@activity.defn` for a Rewind decorator that says what kind it is. A reversible tool also says how
 to read the state it changes and how to undo it. A rewind only undoes an effect if that state still matches what the
 tool left. Otherwise it has drifted (someone else changed it), and it's flagged instead. `state` is optional. Without
-it, the undo always runs. These tools skip idempotency keys to stay short, but a real tool should take one (see the
-[README](../README.md#using-it-in-your-agent)).
+it, the undo always runs. These tools skip idempotency keys to stay short. A real tool should take one, so a retry doesn't apply
+twice.
 
 ```diff
 +def _balance(args):
@@ -82,7 +82,7 @@ it, the undo always runs. These tools skip idempotency keys to stay short, but a
 ```
 
 **The worker** registers Rewind's workflow and activities next to yours. `rewind.ACTIVITIES` includes the tool
-activities, so the tools aren't listed one by one; import them before reading it.
+activities, so the tools aren't listed one by one. Import them before reading it.
 
 ```diff
 -Worker(client, task_queue=TASK_QUEUE, workflows=[SupportAgent],
@@ -99,7 +99,7 @@ result = await rewind.rewind(client, "support-ticket-42", 2, "Max 10% credit. Ne
                              task_queue=TASK_QUEUE)
 ```
 
-The rewind runs as a Temporal workflow, `rewind:support-ticket-42`: it undoes the effects, saves the correction, and
-resets the agent's workflow to step 2's model call. The reset keeps the workflow ID, so in the Temporal UI you'll see
+The rewind runs as a Temporal workflow with the ID `rewind:support-ticket-42`. It undoes the effects, saves the
+correction, and resets the agent's workflow to step 2's model call. The reset keeps the workflow ID, so in the Temporal UI you'll see
 two runs of `support-ticket-42`: the original and the rewound one. The rewind's own history shows the undos it ran:
 `undo_cancel_subscription`, then `undo_add_credit`.

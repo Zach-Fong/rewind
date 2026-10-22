@@ -21,6 +21,7 @@ one-table SQLite file (`billing.py`).
 agent.py     the agent workflow: the standard loop
 tools.py     four tools: get_customer (read-only), add_credit, cancel_subscription (reversible), refund (irreversible)
 model.py     the model call (scripted)
+worker.py    the worker: your workflow and activities, plus Rewind's
 billing.py   the fake billing system the tools change
 run.py       runs the agent, rewinds it, prints both runs
 ```

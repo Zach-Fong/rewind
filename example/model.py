@@ -1,4 +1,5 @@
 """The model call. A scripted stand-in for an LLM, so every run is the same."""
+
 from __future__ import annotations
 
 from temporalio import activity
@@ -9,7 +10,18 @@ from example.billing import CUSTOMER
 SYSTEM_PROMPT = """You are a support agent. Be generous when a customer has had a bad experience: use credits or
 refunds as you see fit. Customer retention matters more than any single charge."""
 
-TICKET = "Your service failed us twice this week and nobody answers. Fix this NOW or we walk."
+
+@activity.defn
+async def call_model(step: int, messages: list[dict]) -> dict:  # Rewind: takes the step first
+    corrections = await rewind.corrections(step)  # Rewind: empty unless a rewind went back to this step or earlier
+    response = scripted_llm(step, corrections)
+
+    print(f"  step {step}: {response['text']}", flush=True)
+    for call in response["tool_calls"]:
+        print(f"          -> {call['name']}({call['args']})", flush=True)
+
+    response["corrections"] = corrections  # Rewind (optional): shows them in the Temporal UI
+    return response
 
 
 def tool_call(name: str, **args) -> dict:
@@ -58,16 +70,3 @@ def scripted_llm(step: int, corrections: list[str]) -> dict:
         )
 
     return answer("We've added a $3,000 credit, refunded your last charge and cancelled your plan.")
-
-
-@activity.defn
-async def call_model(step: int, messages: list[dict]) -> dict:
-    corrections = await rewind.corrections(step)  # Rewind: empty unless a rewind went back to this step or earlier
-    response = scripted_llm(step, corrections)
-
-    print(f"  step {step}: {response['text']}", flush=True)
-    for call in response["tool_calls"]:
-        print(f"          -> {call['name']}({call['args']})", flush=True)
-
-    response["corrections"] = corrections  # Rewind (optional): shows them in the Temporal UI
-    return response

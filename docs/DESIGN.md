@@ -61,7 +61,7 @@ An effect's status follows it from the tool call to its undo:
 |---|---|---|
 | `pending` | Before the tool runs | Leaves it out |
 | `done` | The tool finished | Undoes it, or flags it if it has drifted |
-| `failed` | The tool raised (a retry reopens the row) | Ignores it |
+| `failed` | The tool raised, and no earlier attempt had finished (a retry reopens the row) | Ignores it |
 | `reverting` | Just before its undo runs | Finishes the undo a crash interrupted |
 | `reverted` | Its undo finished | Skips it |
 | `flagged` | An irreversible tool finished, or a rewind found the effect drifted | Leaves it alone and lists it in the correction |
@@ -125,7 +125,7 @@ Most of Rewind's guarantees come down to choosing the right ID, and most IDs com
 | Effect ID | `eff_` + hash of the key | `eff_9c1e…` | One ledger row per tool call, however often it's retried |
 | Undo key | `undo:{effect_id}` | `undo:eff_9c1e…` | Each undo applied at most once |
 | Rewind workflow ID | `rewind:{workflow_id}` | `rewind:support-ticket-42` | At most one rewind of an agent at a time |
-| Rewind ID | the rewind workflow's run ID | `01a2…` | One saved correction per rewind, however often the save is retried |
+| Rewind ID | the rewind workflow's run ID | `01a2…` | One saved correction per rewind, however often the save is retried. It's also the reset's request ID |
 
 ## Design decisions
 
@@ -138,7 +138,7 @@ build its state only from activity results, and its code can't change between th
 
 **Store the correction instead of signalling it.** A signal can't reach a completed run, and a signal sent to the
 rewound run races its first step. Saving the correction to the ledger, where the model activity reads it, avoids both
-problems. The cost is another table, and the model activity has to return the correction to keep it in history.
+problems. The cost is another table, and history only shows the correction if the model activity returns it.
 
 **Make the rewind a workflow.** If the worker or caller dies halfway, the rewind carries on. Its workflow ID works as a
 lock, and its runs are the record of past rewinds. The cost is that rewinding needs a worker running, and a refusal
@@ -167,6 +167,7 @@ twice is the same as running it once, for tools and undos that pass on their ide
 |---|---|
 | The worker dies during a tool call | The `pending` row, written before the call, stays. The retry finds it through the key and keeps the first attempt's before-state, not the half-changed world |
 | The worker dies after the tool's API call, before `done` | The retry sends the same key; the API returns its stored response (without a key, the call runs again) |
+| A retry raises after an earlier attempt finished | The row stays `done` (or `flagged`), so a rewind still undoes or reports the effect |
 | The caller dies during a rewind | Nothing: the rewind workflow carries on on the worker |
 | The worker dies during an undo | The workflow resumes. The row is `reverting`, so the retry runs the undo again with the same undo key, and the API applies it once |
 | The worker dies after saving the correction | The retry saves it again under the same rewind ID, which changes nothing |
@@ -205,6 +206,9 @@ twice is the same as running it once, for tools and undos that pass on their ide
   retry crashed) is left out of the plan and the correction. Fix: list it in the correction as possibly done.
 - **Rewind past a continue-as-new.** A continue-as-new keeps `first_execution_run_id` but restarts the step numbers,
   so steps before it can't be reached. Fix: carry the step count into the new run.
+- **Keep large plans out of the rewind's history.** The rewind passes the whole plan, with every effect's arguments,
+  state and result, through its history three times. A long agent with large tool results can bloat that history or
+  hit Temporal's payload size limit. Fix: pass the reset only the IDs it needs, and leave the effects in the ledger.
 - **Async tools**, or a tool with the same name as another activity on the worker.
 - **Child workflows or subagents.**
 
@@ -253,7 +257,8 @@ need obvious, because "the code ran correctly and the decision was wrong" is how
 reversible ones are, with before and after state; a retry reuses its row and before-state; a new run ID runs the tool
 again; drift is caught (a manual edit, an email already sent); irreversible tools are flagged; a reversible tool
 without `state` is undone without the check; a tool that raises leaves a `failed` row, and a crash after the call a
-`pending` one, even for an irreversible tool; an undo retried after it took effect runs once; corrections apply from
+`pending` one, even for an irreversible tool; a retry that raises after an earlier attempt finished keeps the row
+`done`; an undo retried after it took effect runs once; corrections apply from
 their step on; a duplicate or async tool can't be registered.
 
 `tests/check_rewind.py` starts its own dev server and runs the testbed's agent on several tickets:

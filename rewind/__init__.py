@@ -1,41 +1,52 @@
-"""Rewind: undo what an AI agent did in the real world and re-run it from the step where it went wrong.
+"""Rewind: undo what an AI agent did in the real world, then run it again from the step where it went wrong.
 
-    rewind.read_only / reversible / irreversible   register a tool and its undo (rewind.tools)
-    rewind.workflow                                model_call / tool_calls for your agent workflow (sandbox-safe)
-    await rewind.corrections(step)                 inside your model activity: corrections saved by rewinds
-    rewind.preview / rewind.rewind                 client side (rewind.plan, rewind.client)
-    rewind.WORKFLOWS / ACTIVITIES                  register these on your agent's worker (ACTIVITIES: after your tools)
-    rewind.Ledger                                  the SQLite ledger (REWIND_DB)
+    @rewind.read_only / reversible / irreversible   on your tools
+    rewind.agent_workflow                           in your agent workflow: model_call and tool_calls
+    await rewind.corrections(step)                  in your model activity
+    rewind.WORKFLOWS / ACTIVITIES                   on your worker, after your tools are imported
+    rewind.preview / rewind.rewind                  from your own code
 
-Reading order. A rewind: `workflow.RewindWorkflow.run` makes the plan (`plan.preview`), undoes effects
-(`activities._check_and_undo`), then saves the correction and resets the agent (`activities.reset_agent`). Recording
-a tool call: `workflow.tool_calls` -> `activities.tool_activity` -> `tools.run_and_record`.
+Where to start reading: a rewind begins in `client.rewind`, which starts `RewindWorkflow` in `rewind_workflow.py`.
+Its activities are in `rewind_activities.py`. A tool call is recorded by `run_and_record` in `agent_activities.py`.
+Every ID and activity name is built in `ids.py`.
 """
-from __future__ import annotations
 
-from rewind.activities import corrections
-from rewind.client import RewindResult, rewind
-from rewind.ledger import Ledger
-from rewind.plan import Plan, RewindError, preview
+from rewind import agent_activities, rewind_activities
+from rewind.agent_activities import corrections
+from rewind.client import Plan, RewindError, RewindResult, preview, rewind
+from rewind.ids import rewind_workflow_id
+from rewind.ledger import Effect, Ledger
+from rewind.rewind_workflow import RewindWorkflow
 from rewind.tools import irreversible, read_only, reversible
-from rewind.workflow import RewindWorkflow, rewind_workflow_id
+
+__all__ = [
+    "ACTIVITIES",
+    "WORKFLOWS",
+    "Effect",
+    "Ledger",
+    "Plan",
+    "RewindError",
+    "RewindResult",
+    "corrections",
+    "irreversible",
+    "preview",
+    "read_only",
+    "reversible",
+    "rewind",
+    "rewind_workflow_id",
+]
 
 WORKFLOWS = [RewindWorkflow]
 
-__all__ = [
-    "read_only", "reversible", "irreversible",
-    "Ledger",
-    "corrections",
-    "preview", "Plan", "RewindError",
-    "rewind", "RewindResult",
-    "rewind_workflow_id",
-    "WORKFLOWS", "ACTIVITIES",
-]
 
-
+# ACTIVITIES is built when it's read, not when this file is imported. It holds one activity per registered tool,
+# and your tools register when your own module is imported, after this one.
 def __getattr__(name: str):
-    # Built on access: it lists one activity per registered tool, so import your tools first.
     if name == "ACTIVITIES":
-        from rewind import activities
-        return [activities.preview_activity, activities.reset_agent, *activities.tool_activities()]
-    raise AttributeError(name)
+        return [
+            rewind_activities.preview_activity,
+            rewind_activities.reset_agent,
+            *agent_activities.tool_activities(),
+            *rewind_activities.undo_activities(),
+        ]
+    raise AttributeError(f"module 'rewind' has no attribute {name!r}")

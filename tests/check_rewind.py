@@ -6,11 +6,13 @@
   C  drift: a manual change and an already-sent reply are flagged, not overwritten
   D  repeat rewind (to 2 after 3): only `done` rows undone, corrections accumulate
   E  refusals: running workflow, unreached step, empty correction, rewind already in progress
-  F  a rewind whose undo fails stops before the reset; running it again finishes it; a retried reset doesn't reset twice
+  F  a rewind whose undo fails stops before the reset. Running it again finishes it, and a retried reset doesn't
+     reset twice
   G  a new workflow that reuses the workflow ID: its rewind sees none of the old one's effects or corrections
 
 Usage: .venv/bin/python tests/check_rewind.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,20 +24,23 @@ import tempfile
 _tmp = tempfile.mkdtemp(prefix="rewind-check-")
 os.environ.update(STRIPE_DB=f"{_tmp}/stripe.db", REWIND_DB=f"{_tmp}/rewind.db", MODEL_DELAY_MS="20")
 
-from temporalio.api.enums.v1 import EventType  # noqa: E402
-from temporalio.client import Client  # noqa: E402
-from temporalio.converter import PayloadConverter  # noqa: E402
-from temporalio.exceptions import ApplicationError  # noqa: E402
-from temporalio.testing import ActivityEnvironment, WorkflowEnvironment  # noqa: E402
-from temporalio.worker import Worker  # noqa: E402
+from temporalio.api.enums.v1 import EventType
+from temporalio.client import Client
+from temporalio.converter import PayloadConverter
+from temporalio.exceptions import ApplicationError
+from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
+from temporalio.worker import Worker
 
-import rewind  # noqa: E402
-import testbed  # noqa: E402
-from testbed import data, outbox, tools as t  # noqa: E402
-from testbed.stripe import FakeStripe  # noqa: E402
-from testbed.agent import SupportAgent, workflow_id  # noqa: E402
-from rewind import activities, tools  # noqa: E402
-from rewind.workflow import RewindWorkflow, model_activity_id, rewind_workflow_id  # noqa: E402
+import rewind
+import testbed
+from rewind import rewind_activities, tools
+from rewind.ids import model_activity_id, rewind_workflow_id
+from rewind.ledger import DRIFTED_REASON
+from rewind.rewind_workflow import RewindWorkflow
+from testbed import data, outbox
+from testbed import tools as support_tools
+from testbed.agent import SupportAgent, workflow_id
+from testbed.stripe import FakeStripe
 
 TQ = testbed.TASK_QUEUE
 CORRECTION = "Max 10% credit. Never cancel without asking."
@@ -55,23 +60,23 @@ def steps(effects) -> list[tuple[int, str]]:
     return [(e.step, e.tool) for e in effects]
 
 
-def predicted(plan: rewind.Plan, r: rewind.RewindResult) -> bool:
+def predicted(plan: rewind.Plan, result: rewind.RewindResult) -> bool:
     """The plan's undos are the rewind's, in order, and what it flagged or saw drifted is what stays done."""
-    return ([e.effect_id for e in plan.to_undo] == [e.effect_id for e in r.undone]
-            and sorted(e.effect_id for e in plan.flagged + plan.drifted)
-            == sorted(e.effect_id for e in r.flagged))
+    same_undos = [e.effect_id for e in plan.to_undo] == [e.effect_id for e in result.undone]
+    planned_flagged = sorted(e.effect_id for e in plan.flagged + plan.drifted)
+    same_flagged = planned_flagged == sorted(e.effect_id for e in result.flagged)
+    return same_undos and same_flagged
 
 
 async def run_tickets(client: Client, tickets) -> dict[int, str]:
-    """Fresh scenario; run the tickets to completion. Returns their run IDs."""
+    """Start a fresh scenario and run the tickets to completion. Returns their run IDs."""
     for n in range(1, len(data.TICKETS) + 1):
         try:
             await client.get_workflow_handle(workflow_id(n)).terminate()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     testbed.seed()
-    handles = [await client.start_workflow(SupportAgent.run, n, id=workflow_id(n), task_queue=TQ)
-               for n in tickets]
+    handles = [await client.start_workflow(SupportAgent.run, n, id=workflow_id(n), task_queue=TQ) for n in tickets]
     await asyncio.gather(*(h.result() for h in handles))
     return {n: h.result_run_id for n, h in zip(tickets, handles, strict=True)}
 
@@ -104,12 +109,18 @@ async def scenario_a_b_d(client: Client) -> None:
     before = FakeStripe().snapshot()
     rows_before = [(e.effect_id, e.status) for e in ledger.list_effects(WF, first)]
     plan = await rewind.preview(client, WF, 3)
-    check("B preview changes nothing", FakeStripe().snapshot() == before
-          and [(e.effect_id, e.status) for e in ledger.list_effects(WF, first)] == rows_before)
-    check("B preview plan: keep step 2, undo 5→3, refund flagged",
-          steps(plan.kept) == [(2, "apply_discount")]
-          and steps(plan.to_undo) == [(5, "send_reply"), (4, "schedule_cancel"), (3, "add_credit")]
-          and steps(plan.flagged) == [(4, "refund")] and not plan.drifted)
+    check(
+        "B preview changes nothing",
+        FakeStripe().snapshot() == before
+        and [(e.effect_id, e.status) for e in ledger.list_effects(WF, first)] == rows_before,
+    )
+    check(
+        "B preview plan: keep step 2, undo 5→3, refund flagged",
+        steps(plan.kept) == [(2, "apply_discount")]
+        and steps(plan.to_undo) == [(5, "send_reply"), (4, "schedule_cancel"), (3, "add_credit")]
+        and steps(plan.flagged) == [(4, "refund")]
+        and not plan.drifted,
+    )
 
     rewind_1 = await rewind.rewind(client, WF, 3, CORRECTION, task_queue=TQ)
     outcome = await client.get_workflow_handle(WF, run_id=rewind_1.rewound_run_id).result()
@@ -121,58 +132,97 @@ async def scenario_a_b_d(client: Client) -> None:
     effects = ledger.list_effects(WF, first)
     old = {(e.step, e.tool): e for e in effects if e.run_id == rewind_1.original_run_id}
     new = [(e.step, e.tool, e.status) for e in effects if e.run_id == rewind_1.rewound_run_id]
-    check("A step 2 kept", old[(2, "apply_discount")].status == "done"
-          and t.lookup_customer(HERO)["discount_pct"] == 10)
-    check("A steps 3-5 reverted, refund flagged",
-          [old[k].status for k in [(3, "add_credit"), (4, "schedule_cancel"), (5, "send_reply"), (4, "refund")]]
-          == ["reverted", "reverted", "reverted", "flagged"])
-    check("A new run: capped $200 credit and a reply asking first; no cancel or refund",
-          new == [(3, "add_credit", "done"), (4, "send_reply", "done")], str(new))
-    customer = t.lookup_customer(HERO)
-    check("A Stripe: balance = new credit only, plan not cancelled",
-          customer["balance_cents"] == 20000 and not customer["cancel_at_period_end"], str(customer))
+    check(
+        "A step 2 kept",
+        old[(2, "apply_discount")].status == "done" and support_tools.lookup_customer(HERO)["discount_pct"] == 10,
+    )
+    check(
+        "A steps 3-5 reverted, refund flagged",
+        [old[k].status for k in [(3, "add_credit"), (4, "schedule_cancel"), (5, "send_reply"), (4, "refund")]]
+        == ["reverted", "reverted", "reverted", "flagged"],
+    )
+    check(
+        "A new run: capped $200 credit and a reply asking first; no cancel or refund",
+        new == [(3, "add_credit", "done"), (4, "send_reply", "done")],
+        str(new),
+    )
+    customer = support_tools.lookup_customer(HERO)
+    check(
+        "A Stripe: balance = new credit only, plan not cancelled",
+        customer["balance_cents"] == 20000 and not customer["cancel_at_period_end"],
+        str(customer),
+    )
     msgs = [m["status"] for m in outbox.messages(4)]
     check("A outbox: original reply cancelled, new one scheduled", msgs == ["cancelled", "scheduled"], str(msgs))
-    check("A steps 1-2 not re-run (no new-run effects before step 3)",
-          all(s >= 3 for s, *_ in new) and sum(1 for e in effects if e.tool == "apply_discount") == 1)
+    check(
+        "A steps 1-2 not re-run (no new-run effects before step 3)",
+        all(s >= 3 for s, *_ in new) and sum(1 for e in effects if e.tool == "apply_discount") == 1,
+    )
     step3_model = await model_result(client, rewind_1.rewound_run_id, 3)
-    check("A rewound step 3 model call got the correction (in history)",
-          step3_model is not None and step3_model["corrections"] and CORRECTION in step3_model["corrections"][0]
-          and "refund $240" in step3_model["corrections"][0], str(step3_model)[:200])
+    check(
+        "A rewound step 3 model call got the correction (in history)",
+        step3_model is not None
+        and step3_model["corrections"]
+        and CORRECTION in step3_model["corrections"][0]
+        and "refund $240" in step3_model["corrections"][0],
+        str(step3_model)[:200],
+    )
     step1_model = await model_result(client, rewind_1.rewound_run_id, 1)
-    check("A replayed step 1 kept its original result (no correction)",
-          step1_model is not None and not step1_model["corrections"])
+    check(
+        "A replayed step 1 kept its original result (no correction)",
+        step1_model is not None and not step1_model["corrections"],
+    )
     others = {n: (await client.get_workflow_handle(workflow_id(n)).describe()).run_id for n in runs if n != 4}
     check("A other tickets untouched", all(others[n] == runs[n] for n in others))
     record = await client.get_workflow_handle(rewind_workflow_id(WF)).describe()
-    check("A rewind recorded in Temporal",
-          record.run_id == rewind_1.rewind_id and record.workflow_type == "rewind.Rewind")
+    check(
+        "A rewind recorded in Temporal", record.run_id == rewind_1.rewind_id and record.workflow_type == "rewind.Rewind"
+    )
     agent_types = await activity_types(client, WF, rewind_1.rewound_run_id)
     rewind_types = await activity_types(client, rewind_workflow_id(WF), rewind_1.rewind_id)
-    check("A activities named after the tools and their undos",
-          {"call_model", "lookup_customer", "get_incidents", "apply_discount", "add_credit", "send_reply"}
-          == agent_types
-          and {"rewind.preview", "undo_send_reply", "undo_schedule_cancel", "undo_add_credit",
-               "rewind.reset_agent"} == rewind_types, f"{agent_types} {rewind_types}")
+    check(
+        "A activities named after the tools and their undos",
+        {"call_model", "lookup_customer", "get_incidents", "apply_discount", "add_credit", "send_reply"} == agent_types
+        and {"rewind.preview", "undo_send_reply", "undo_schedule_cancel", "undo_add_credit", "rewind.reset_agent"}
+        == rewind_types,
+        f"{agent_types} {rewind_types}",
+    )
 
     # D: rewind the rewound run again, to step 2
     rewind_2 = await rewind.rewind(client, WF, 2, "No discounts either.", task_queue=TQ)
     outcome_2 = await client.get_workflow_handle(WF, run_id=rewind_2.rewound_run_id).result()
-    check("D second rewind undoes the step 2 discount and the first rewound run's effects",
-          sorted(steps(rewind_2.undone)) == [(2, "apply_discount"), (3, "add_credit"), (4, "send_reply")],
-          str(steps(rewind_2.undone)))
+    check(
+        "D second rewind undoes the step 2 discount and the first rewound run's effects",
+        sorted(steps(rewind_2.undone)) == [(2, "apply_discount"), (3, "add_credit"), (4, "send_reply")],
+        str(steps(rewind_2.undone)),
+    )
     old_rows = {(e.step, e.tool): e.status for e in ledger.list_effects(WF, first, run_id=rewind_1.original_run_id)}
-    check("D first run's rows: discount now reverted, the rest unchanged; refund still flagged and reported",
-          old_rows == {(2, "apply_discount"): "reverted", (3, "add_credit"): "reverted",
-                       (4, "schedule_cancel"): "reverted", (4, "refund"): "flagged", (5, "send_reply"): "reverted"}
-          and steps(rewind_2.flagged) == [(4, "refund")], str(old_rows))
+    check(
+        "D first run's rows: discount now reverted, the rest unchanged; refund still flagged and reported",
+        old_rows
+        == {
+            (2, "apply_discount"): "reverted",
+            (3, "add_credit"): "reverted",
+            (4, "schedule_cancel"): "reverted",
+            (4, "refund"): "flagged",
+            (5, "send_reply"): "reverted",
+        }
+        and steps(rewind_2.flagged) == [(4, "refund")],
+        str(old_rows),
+    )
     step2_model = await model_result(client, rewind_2.rewound_run_id, 2)
-    check("D corrections accumulate (step 2 sees only the new one; step 3 sees both)",
-          step2_model is not None and len(step2_model["corrections"]) == 1
-          and "No discounts" in step2_model["corrections"][0])
+    check(
+        "D corrections accumulate (step 2 sees only the new one; step 3 sees both)",
+        step2_model is not None
+        and len(step2_model["corrections"]) == 1
+        and "No discounts" in step2_model["corrections"][0],
+    )
     step3_model_2 = await model_result(client, rewind_2.rewound_run_id, 3)
-    check("D step 3 sees both corrections",
-          step3_model_2 is not None and len(step3_model_2["corrections"]) == 2, str(step3_model_2)[:200])
+    check(
+        "D step 3 sees both corrections",
+        step3_model_2 is not None and len(step3_model_2["corrections"]) == 2,
+        str(step3_model_2)[:200],
+    )
     check("D run completes", outcome_2["status"] == "awaiting_customer", str(outcome_2))
 
 
@@ -180,23 +230,36 @@ async def scenario_c(client: Client) -> None:
     first = (await run_tickets(client, [4]))[4]
     FakeStripe().tamper("customers", HERO, balance_cents=1234)  # someone edited the balance by hand
     [reply] = [e for e in ledger.list_effects(WF, first) if e.tool == "send_reply"]
-    outbox.deliver(reply.result["message_id"])                       # and the reply already went out
+    outbox.deliver(reply.result["message_id"])  # and the reply already went out
     plan = await rewind.preview(client, WF, 3)
-    check("C preview predicts both drifted", sorted(steps(plan.drifted)) == [(3, "add_credit"), (5, "send_reply")],
-          str(steps(plan.drifted)))
+    check(
+        "C preview predicts both drifted",
+        sorted(steps(plan.drifted)) == [(3, "add_credit"), (5, "send_reply")],
+        str(steps(plan.drifted)),
+    )
     result = await rewind.rewind(client, WF, 3, CORRECTION, task_queue=TQ)
     await client.get_workflow_handle(WF, run_id=result.rewound_run_id).result()
     check("C preview predicted the real rewind", predicted(plan, result))
     flagged = {(e.step, e.tool): e.reason for e in result.flagged}
-    check("C drifted effects flagged, not undone", flagged.get((3, "add_credit")) == activities.DRIFTED_REASON
-          and flagged.get((5, "send_reply")) == activities.DRIFTED_REASON, str(flagged))
+    check(
+        "C drifted effects flagged, not undone",
+        flagged.get((3, "add_credit")) == DRIFTED_REASON and flagged.get((5, "send_reply")) == DRIFTED_REASON,
+        str(flagged),
+    )
     new = [e.tool for e in ledger.list_effects(WF, first, run_id=result.rewound_run_id)]
-    check("C manual change not overwritten, and the agent (told the credit still stands) adds no second one",
-          t.lookup_customer(HERO)["balance_cents"] == 1234 and new == ["send_reply"], f"{new}")
-    check("C drifted effects listed in the correction",
-          "add_credit $3,000" in result.correction and "send_reply" in result.correction, result.correction)
-    check("C reversible cancel still undone",
-          steps(result.undone) == [(4, "schedule_cancel")], str(steps(result.undone)))
+    check(
+        "C manual change not overwritten, and the agent (told the credit still stands) adds no second one",
+        support_tools.lookup_customer(HERO)["balance_cents"] == 1234 and new == ["send_reply"],
+        f"{new}",
+    )
+    check(
+        "C drifted effects listed in the correction",
+        "add_credit $3,000" in result.correction and "send_reply" in result.correction,
+        result.correction,
+    )
+    check(
+        "C reversible cancel still undone", steps(result.undone) == [(4, "schedule_cancel")], str(steps(result.undone))
+    )
 
 
 async def scenario_e(client: Client) -> None:
@@ -213,10 +276,12 @@ async def scenario_e(client: Client) -> None:
     await refused("E unreached step refused", rewind.rewind(client, WF, 9, CORRECTION, task_queue=TQ))
     await refused("E empty correction refused", rewind.rewind(client, WF, 3, "  ", task_queue=TQ))
     # a rewind that can't progress (no worker on its queue) holds the workflow ID
-    busy = await client.start_workflow(RewindWorkflow.run, args=[WF, 3, "x"], id=rewind_workflow_id(WF),
-                                       task_queue="nobody")
-    await refused("E second rewind while one is in progress refused",
-                  rewind.rewind(client, WF, 3, CORRECTION, task_queue=TQ))
+    busy = await client.start_workflow(
+        RewindWorkflow.run, args=[WF, 3, "x"], id=rewind_workflow_id(WF), task_queue="nobody"
+    )
+    await refused(
+        "E second rewind while one is in progress refused", rewind.rewind(client, WF, 3, CORRECTION, task_queue=TQ)
+    )
     await busy.terminate()
     os.environ["MODEL_DELAY_MS"] = "1000"
     h = await client.start_workflow(SupportAgent.run, 5, id=workflow_id(5), task_queue=TQ)
@@ -246,16 +311,25 @@ async def scenario_f(client: Client) -> None:
 
     result = await rewind.rewind(client, WF, 3, CORRECTION, task_queue=TQ)
     await client.get_workflow_handle(WF, run_id=result.rewound_run_id).result()
-    check("F running it again undoes only what was left, and the new run follows the correction",
-          steps(result.undone) == [(3, "add_credit")] and t.lookup_customer(HERO)["balance_cents"] == 20000,
-          str(steps(result.undone)))
+    check(
+        "F running it again undoes only what was left, and the new run follows the correction",
+        steps(result.undone) == [(3, "add_credit")] and support_tools.lookup_customer(HERO)["balance_cents"] == 20000,
+        str(steps(result.undone)),
+    )
 
-    plan = {"workflow_id": WF, "run_id": result.original_run_id, "first_run_id": first, "step": 3,
-            "reset_event_id": result.reset_event_id}
-    again = await ActivityEnvironment(client).run(activities.reset_agent, result.rewind_id, plan, CORRECTION)
+    plan = {
+        "workflow_id": WF,
+        "run_id": result.original_run_id,
+        "first_run_id": first,
+        "step": 3,
+        "reset_event_id": result.reset_event_id,
+    }
+    again = await ActivityEnvironment(client).run(rewind_activities.reset_agent, result.rewind_id, plan, CORRECTION)
     latest = (await client.get_workflow_handle(WF).describe()).run_id
-    check("F a retried reset returns the run it made, without resetting again or saving the correction twice",
-          again["rewound_run_id"] == result.rewound_run_id == latest and len(ledger.corrections(WF, first, 3)) == 1)
+    check(
+        "F a retried reset returns the run it made, without resetting again or saving the correction twice",
+        again["rewound_run_id"] == result.rewound_run_id == latest and len(ledger.corrections(WF, first, 3)) == 1,
+    )
 
 
 async def scenario_g(client: Client) -> None:
@@ -271,26 +345,37 @@ async def scenario_g(client: Client) -> None:
     await h.result()
     first_b = h.result_run_id
     new_step3 = await model_result(client, first_b, 3)
-    check("G new workflow with the same ID starts with no corrections",
-          new_step3 is not None and new_step3["corrections"] == [])
-    result_b = await rewind.rewind(client, WF, 3, "Max 10% credit. Never cancel without asking. Be brief.",
-                                   task_queue=TQ)
+    check(
+        "G new workflow with the same ID starts with no corrections",
+        new_step3 is not None and new_step3["corrections"] == [],
+    )
+    result_b = await rewind.rewind(
+        client, WF, 3, "Max 10% credit. Never cancel without asking. Be brief.", task_queue=TQ
+    )
     await client.get_workflow_handle(WF, run_id=result_b.rewound_run_id).result()
     touched = result_b.undone + result_b.flagged + result_b.kept
-    check("G its rewind touches only its own effects; the old workflow's rows are unchanged",
-          result_b.undone and all(e.first_run_id == first_b for e in touched)
-          and [(e.effect_id, e.status) for e in ledger.list_effects(WF, first_a)] == rows_a, str(steps(touched)))
+    check(
+        "G its rewind touches only its own effects; the old workflow's rows are unchanged",
+        result_b.undone
+        and all(e.first_run_id == first_b for e in touched)
+        and [(e.effect_id, e.status) for e in ledger.list_effects(WF, first_a)] == rows_a,
+        str(steps(touched)),
+    )
     rewound_step3 = await model_result(client, result_b.rewound_run_id, 3)
-    check("G its rewound run sees only its own correction",
-          rewound_step3 is not None and len(rewound_step3["corrections"]) == 1
-          and "Be brief" in rewound_step3["corrections"][0], str(rewound_step3 and rewound_step3["corrections"]))
+    check(
+        "G its rewound run sees only its own correction",
+        rewound_step3 is not None
+        and len(rewound_step3["corrections"]) == 1
+        and "Be brief" in rewound_step3["corrections"][0],
+        str(rewound_step3 and rewound_step3["corrections"]),
+    )
 
 
 async def main() -> int:
     async with await WorkflowEnvironment.start_local() as env:
         async with Worker(env.client, task_queue=TQ, workflows=testbed.WORKFLOWS, activities=testbed.ACTIVITIES):
-            for s in (scenario_a_b_d, scenario_c, scenario_e, scenario_f, scenario_g):
-                await s(env.client)
+            for scenario in (scenario_a_b_d, scenario_c, scenario_e, scenario_f, scenario_g):
+                await scenario(env.client)
     print("\nALL PASS" if not FAILS else f"\nFAILURES: {FAILS}")
     return 1 if FAILS else 0
 

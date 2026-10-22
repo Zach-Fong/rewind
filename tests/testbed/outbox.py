@@ -2,12 +2,13 @@
 
 Message status: scheduled, then sent (`deliver()`, the send time passing) or cancelled (an undo).
 """
+
 from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 
 @contextmanager
@@ -15,8 +16,10 @@ def _connect() -> Iterator[sqlite3.Connection]:
     c = sqlite3.connect(os.environ.get("STRIPE_DB", "stripe.db"), timeout=30, isolation_level=None)
     c.row_factory = sqlite3.Row
     try:
-        c.execute("CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, key TEXT UNIQUE, ticket_id INTEGER,"
-                  " customer_id TEXT, body TEXT, send_at TEXT, status TEXT)")
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, key TEXT UNIQUE, ticket_id INTEGER,"
+            " customer_id TEXT, body TEXT, send_at TEXT, status TEXT)"
+        )
         yield c
     finally:
         c.close()
@@ -42,8 +45,10 @@ def schedule(ticket_id: int, customer_id: str, body: str, send_at: str, idempote
             if existing:
                 return existing["id"]
         message_id = f"msg_{c.execute('SELECT COUNT(*) FROM outbox').fetchone()[0] + 1:03d}"
-        c.execute("INSERT INTO outbox VALUES (?,?,?,?,?,?,?)",
-                  (message_id, idempotency_key, ticket_id, customer_id, body, send_at, "scheduled"))
+        c.execute(
+            "INSERT INTO outbox VALUES (?,?,?,?,?,?,?)",
+            (message_id, idempotency_key, ticket_id, customer_id, body, send_at, "scheduled"),
+        )
         return message_id
 
 

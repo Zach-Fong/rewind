@@ -1,22 +1,24 @@
 """Fake Stripe: a small Stripe-shaped client backed by a SQLite file shared across processes.
 
-Objects: customers (balance_cents; positive = credit owed to the customer), subscriptions (amount_cents, discount_pct,
-cancel_at_period_end, status), charges (amount_cents, refunded_cents), balance transactions, refunds. Customer IDs
-come from the seed; other IDs are deterministic counters (sub_001, ch_001, txn_001, re_001).
+Objects: customers (balance_cents, where positive means credit owed to the customer), subscriptions (amount_cents,
+discount_pct, cancel_at_period_end, status), charges (amount_cents, refunded_cents), balance transactions, refunds.
+Customer IDs come from the seed. Other IDs are deterministic counters (sub_001, ch_001, txn_001, re_001).
 
 Idempotency (the semantics Rewind depends on): every mutating call takes `idempotency_key`. Same key + same operation +
-same params returns the stored response without executing again; same key with different operation/params raises
-IdempotencyError; a new key executes. Key expiry is NOT modeled. `idempotency_key=None` disables the check.
+same params returns the stored response without running again. The same key with a different operation or params
+raises IdempotencyError. A new key runs. Key expiry is NOT modeled. `idempotency_key=None` disables the check.
 
 Multi-process safety: a connection per call, a busy timeout, and BEGIN IMMEDIATE for writes.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import sqlite3
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator
+from typing import Any
 
 
 class StripeError(Exception):
@@ -43,7 +45,7 @@ CREATE TABLE IF NOT EXISTS idempotency (
     key TEXT PRIMARY KEY, operation TEXT NOT NULL, params TEXT NOT NULL, response TEXT NOT NULL);
 """
 
-# Tables in snapshot(); idempotency records are deliberately excluded.
+# The tables snapshot() dumps. Idempotency records are left out on purpose.
 SNAPSHOT_TABLES = ["customers", "subscriptions", "charges", "balance_transactions", "refunds"]
 
 
@@ -92,12 +94,15 @@ class FakeStripe:
                     if row["operation"] != operation or row["params"] != canonical:
                         raise IdempotencyError(
                             f"Keys for idempotent requests can only be used with the same parameters they were first "
-                            f"used with (key={key!r}, first used for {row['operation']} {row['params']})")
+                            f"used with (key={key!r}, first used for {row['operation']} {row['params']})"
+                        )
                     return json.loads(row["response"])
             response = fn(c)
             if key is not None:
-                c.execute("INSERT INTO idempotency VALUES (?, ?, ?, ?)",
-                          (key, operation, canonical, json.dumps(response, sort_keys=True)))
+                c.execute(
+                    "INSERT INTO idempotency VALUES (?, ?, ?, ?)",
+                    (key, operation, canonical, json.dumps(response, sort_keys=True)),
+                )
             return response
 
     # -- retrieve ---------------------------------------------------------------------------------------------
@@ -119,8 +124,9 @@ class FakeStripe:
         return [dict(r) for r in rows]
 
     # -- mutations --------------------------------------------------------------------------------------------
-    def create_balance_transaction(self, customer_id: str, amount_cents: int, description: str = "",
-                                   idempotency_key: str | None = None) -> dict:
+    def create_balance_transaction(
+        self, customer_id: str, amount_cents: int, description: str = "", idempotency_key: str | None = None
+    ) -> dict:
         params = {"customer_id": customer_id, "amount_cents": amount_cents, "description": description}
 
         def run(c: sqlite3.Connection) -> dict:
@@ -128,17 +134,24 @@ class FakeStripe:
             if cust is None:
                 raise StripeError(f"No such customer: {customer_id!r}")
             txn_id = self._next_id(c, "txn")
-            c.execute("INSERT INTO balance_transactions VALUES (?, ?, ?, ?)",
-                      (txn_id, customer_id, amount_cents, description))
+            c.execute(
+                "INSERT INTO balance_transactions VALUES (?, ?, ?, ?)", (txn_id, customer_id, amount_cents, description)
+            )
             balance = cust["balance_cents"] + amount_cents
             c.execute("UPDATE customers SET balance_cents=? WHERE id=?", (balance, customer_id))
-            return {"id": txn_id, "customer_id": customer_id, "amount_cents": amount_cents,
-                    "description": description, "ending_balance_cents": balance}
+            return {
+                "id": txn_id,
+                "customer_id": customer_id,
+                "amount_cents": amount_cents,
+                "description": description,
+                "ending_balance_cents": balance,
+            }
 
         return self._mutate("create_balance_transaction", params, idempotency_key, run)
 
-    def _update_subscription(self, operation: str, subscription_id: str, column: str, value: int,
-                             idempotency_key: str | None) -> dict:
+    def _update_subscription(
+        self, operation: str, subscription_id: str, column: str, value: int, idempotency_key: str | None
+    ) -> dict:
         def run(c: sqlite3.Connection) -> dict:
             if c.execute(f"UPDATE subscriptions SET {column}=? WHERE id=?", (value, subscription_id)).rowcount == 0:
                 raise StripeError(f"No such subscription: {subscription_id!r}")
@@ -153,8 +166,9 @@ class FakeStripe:
         return self._update_subscription("set_discount", subscription_id, "discount_pct", percent, idempotency_key)
 
     def set_cancel_at_period_end(self, subscription_id: str, value: bool, idempotency_key: str | None = None) -> dict:
-        return self._update_subscription("set_cancel_at_period_end", subscription_id, "cancel_at_period_end",
-                                         int(value), idempotency_key)
+        return self._update_subscription(
+            "set_cancel_at_period_end", subscription_id, "cancel_at_period_end", int(value), idempotency_key
+        )
 
     def create_refund(self, charge_id: str, amount_cents: int, idempotency_key: str | None = None) -> dict:
         params = {"charge_id": charge_id, "amount_cents": amount_cents}
@@ -181,10 +195,13 @@ class FakeStripe:
             for table in ["counters", "idempotency", *SNAPSHOT_TABLES]:
                 c.execute(f"DELETE FROM {table}")
             for cus, name, plan_cents, charge_cents in customers:
-                c.execute("INSERT INTO customers VALUES (?, ?, ?, 0)",
-                          (cus, name, f"{name.split()[0].lower()}@example.com"))
-                c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, 0, 0, 'active')",
-                          (self._next_id(c, "sub"), cus, plan_cents))
+                c.execute(
+                    "INSERT INTO customers VALUES (?, ?, ?, 0)", (cus, name, f"{name.split()[0].lower()}@example.com")
+                )
+                c.execute(
+                    "INSERT INTO subscriptions VALUES (?, ?, ?, 0, 0, 'active')",
+                    (self._next_id(c, "sub"), cus, plan_cents),
+                )
                 c.execute("INSERT INTO charges VALUES (?, ?, ?, 0)", (self._next_id(c, "ch"), cus, charge_cents))
 
     def snapshot(self) -> dict[str, Any]:

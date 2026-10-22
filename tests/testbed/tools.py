@@ -1,10 +1,11 @@
-"""The support agent's tools, registered with Rewind. Money tools go to the fake Stripe; replies go to the fake
+"""The support agent's tools, registered with Rewind. Money tools go to the fake Stripe. Replies go to the fake
 outbox, where they wait until their send time, so a rewind can still cancel them.
 
   read-only     lookup_customer, get_incidents, search_docs
   reversible    add_credit, apply_discount, schedule_cancel, send_reply
   irreversible  refund
 """
+
 from __future__ import annotations
 
 import rewind
@@ -30,10 +31,16 @@ def lookup_customer(customer_id: str) -> dict:
     customer = stripe.retrieve_customer(customer_id)
     sub = _subscription(customer_id)
     charges = stripe.list_charges(customer_id)
-    return {"customer_id": customer_id, "name": customer["name"], "balance_cents": customer["balance_cents"],
-            "plan_cents": sub["amount_cents"], "discount_pct": sub["discount_pct"],
-            "cancel_at_period_end": sub["cancel_at_period_end"], "status": sub["status"],
-            "last_charge_cents": charges[0]["amount_cents"] if charges else 0}
+    return {
+        "customer_id": customer_id,
+        "name": customer["name"],
+        "balance_cents": customer["balance_cents"],
+        "plan_cents": sub["amount_cents"],
+        "discount_pct": sub["discount_pct"],
+        "cancel_at_period_end": sub["cancel_at_period_end"],
+        "status": sub["status"],
+        "last_charge_cents": charges[0]["amount_cents"] if charges else 0,
+    }
 
 
 @rewind.read_only
@@ -53,14 +60,19 @@ def _balance(args: dict) -> dict:
 
 
 def _undo_credit(effect, key: str) -> dict:
-    return FakeStripe().create_balance_transaction(effect.args["customer_id"], -effect.args["amount_cents"],
-                                                   "undo agent credit", idempotency_key=key)
+    return FakeStripe().create_balance_transaction(
+        effect.args["customer_id"], -effect.args["amount_cents"], "undo agent credit", idempotency_key=key
+    )
 
 
-@rewind.reversible(state=_balance, undo=_undo_credit,
-                   describe=lambda e: f"add_credit {_usd(e.args['amount_cents'])} to {e.args['customer_id']}")
-def add_credit(customer_id: str, amount_cents: int, reason: str = "goodwill",
-               idempotency_key: str | None = None) -> dict:
+@rewind.reversible(
+    state=_balance,
+    undo=_undo_credit,
+    describe=lambda e: f"add_credit {_usd(e.args['amount_cents'])} to {e.args['customer_id']}",
+)
+def add_credit(
+    customer_id: str, amount_cents: int, reason: str = "goodwill", idempotency_key: str | None = None
+) -> dict:
     txn = FakeStripe().create_balance_transaction(customer_id, amount_cents, reason, idempotency_key=idempotency_key)
     return {"balance_transaction_id": txn["id"], "ending_balance_cents": txn["ending_balance_cents"]}
 
@@ -70,12 +82,16 @@ def _discount(args: dict) -> dict:
 
 
 def _undo_discount(effect, key: str) -> dict:
-    return FakeStripe().set_discount(effect.result["subscription_id"], effect.before["discount_pct"],
-                                     idempotency_key=key)
+    return FakeStripe().set_discount(
+        effect.result["subscription_id"], effect.before["discount_pct"], idempotency_key=key
+    )
 
 
-@rewind.reversible(state=_discount, undo=_undo_discount,
-                   describe=lambda e: f"apply_discount {e.args['percent']}% for {e.args['customer_id']}")
+@rewind.reversible(
+    state=_discount,
+    undo=_undo_discount,
+    describe=lambda e: f"apply_discount {e.args['percent']}% for {e.args['customer_id']}",
+)
 def apply_discount(customer_id: str, percent: int, idempotency_key: str | None = None) -> dict:
     sub = _subscription(customer_id)
     FakeStripe().set_discount(sub["id"], percent, idempotency_key=idempotency_key)
@@ -87,12 +103,14 @@ def _cancel_flag(args: dict) -> dict:
 
 
 def _undo_cancel(effect, key: str) -> dict:
-    return FakeStripe().set_cancel_at_period_end(effect.result["subscription_id"],
-                                                 effect.before["cancel_at_period_end"], idempotency_key=key)
+    return FakeStripe().set_cancel_at_period_end(
+        effect.result["subscription_id"], effect.before["cancel_at_period_end"], idempotency_key=key
+    )
 
 
-@rewind.reversible(state=_cancel_flag, undo=_undo_cancel,
-                   describe=lambda e: f"schedule_cancel for {e.args['customer_id']}")
+@rewind.reversible(
+    state=_cancel_flag, undo=_undo_cancel, describe=lambda e: f"schedule_cancel for {e.args['customer_id']}"
+)
 def schedule_cancel(customer_id: str, idempotency_key: str | None = None) -> dict:
     """Cancels at the end of the billing period."""
     sub = _subscription(customer_id)
@@ -109,13 +127,16 @@ def _undo_reply(effect, key: str) -> dict:
     return {"message_id": effect.result["message_id"], "status": "cancelled"}
 
 
-@rewind.reversible(state=_scheduled_replies, undo=_undo_reply,
-                   describe=lambda e: f"send_reply to ticket {e.args['ticket_id']} (sends {e.result['send_at']})")
-def send_reply(customer_id: str, ticket_id: int, body: str, send_at: str = data.REPLY_AT,
-               idempotency_key: str | None = None) -> dict:
-    """Schedules the reply; it goes out at `send_at`."""
-    return {"message_id": outbox.schedule(ticket_id, customer_id, body, send_at, idempotency_key),
-            "send_at": send_at}
+@rewind.reversible(
+    state=_scheduled_replies,
+    undo=_undo_reply,
+    describe=lambda e: f"send_reply to ticket {e.args['ticket_id']} (sends {e.result['send_at']})",
+)
+def send_reply(
+    customer_id: str, ticket_id: int, body: str, send_at: str = data.REPLY_AT, idempotency_key: str | None = None
+) -> dict:
+    """Schedules the reply. It goes out at `send_at`."""
+    return {"message_id": outbox.schedule(ticket_id, customer_id, body, send_at, idempotency_key), "send_at": send_at}
 
 
 # -- irreversible -------------------------------------------------------------------------------------------

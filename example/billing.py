@@ -1,5 +1,8 @@
-"""A tiny fake billing system (think Stripe): one customer table in a SQLite file, `BILLING_DB`.
-This is the "real world" the agent changes. It knows nothing about Rewind."""
+"""A tiny fake billing system, like Stripe: one customer table in a SQLite file at `BILLING_DB`.
+
+This is the "real world" the agent changes. It knows nothing about Rewind.
+"""
+
 from __future__ import annotations
 
 import os
@@ -38,10 +41,8 @@ def seed() -> None:
     """One customer: Northwind Freight, $2,000/month, last charged $240."""
     with closing(_db()) as conn:
         conn.executescript(SCHEMA)
-    _execute(
-        "INSERT INTO customers VALUES (?, ?, ?, ?, 0, 0, 0)",
-        CUSTOMER, "Northwind Freight", 200000, 24000,
-    )
+    customer = (CUSTOMER, "Northwind Freight", 200000, 24000)
+    _execute("INSERT INTO customers VALUES (?, ?, ?, ?, 0, 0, 0)", *customer)
 
 
 def get(customer_id: str) -> dict:

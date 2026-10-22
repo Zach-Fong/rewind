@@ -86,7 +86,7 @@ Pass it to your API so a retry doesn't apply twice.
 `workflow.execute_activity`:
 
 ```python
-from rewind import workflow as rw
+from rewind import agent_workflow as rw
 
 for step in range(1, MAX_STEPS + 1):
     reply = await rw.model_call(call_model, step, messages)    # runs call_model(step, messages)

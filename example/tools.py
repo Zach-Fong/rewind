@@ -1,9 +1,9 @@
 """The agent's tools. Rewind's decorators say whether each one can be undone, and how."""
+
 from __future__ import annotations
 
 import rewind  # Rewind
 from example import billing
-from rewind.ledger import Effect
 
 
 @rewind.read_only  # Rewind
@@ -15,8 +15,9 @@ def _balance(args: dict) -> int:  # Rewind: the state add_credit changes
     return billing.get(args["customer_id"])["balance_cents"]
 
 
-# The fake billing has no idempotency keys, so these undos ignore `key`; tests/testbed/tools.py passes it on.
-def _undo_credit(effect: Effect, key: str) -> None:  # Rewind
+# The fake billing has no idempotency keys, so these undos ignore `key`. A real undo passes it on to its API, as
+# tests/testbed/tools.py does.
+def _undo_credit(effect: rewind.Effect, key: str) -> None:  # Rewind: undoes one add_credit call
     billing.add_balance(effect.args["customer_id"], -effect.args["amount_cents"])
 
 
@@ -30,7 +31,7 @@ def _cancelled(args: dict) -> bool:  # Rewind: the state cancel_subscription cha
     return billing.get(args["customer_id"])["cancelled"]
 
 
-def _undo_cancel(effect: Effect, key: str) -> None:  # Rewind
+def _undo_cancel(effect: rewind.Effect, key: str) -> None:  # Rewind: restores the cancelled flag from before the call
     billing.set_cancelled(effect.args["customer_id"], effect.before)
 
 

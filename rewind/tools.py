@@ -1,6 +1,6 @@
 """Decorators that register an agent's tools and say how a rewind treats each one.
 
-    @rewind.read_only()                        runs normally and isn't recorded
+    @rewind.read_only                          runs normally and isn't recorded
     @rewind.reversible(undo=..., state=...)    recorded, and a rewind undoes it unless it has drifted
     @rewind.irreversible()                     recorded as flagged, and a rewind tells the agent instead
 

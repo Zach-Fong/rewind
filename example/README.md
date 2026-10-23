@@ -1,17 +1,17 @@
 # Example: rewind a support agent
 
 A standard Temporal agent loop handles one angry customer. The policy says "be generous", so at step 2 it credits
-$3,000 (150% of a $2,000/month plan), and at step 3 it cancels their subscription and refunds $240. You rewind it to
-step 2 with a correction, "Max 10% credit. Never cancel without asking.":
+$3,000 (150% of a $2,000/month plan), and at step 3 it cancels their subscription and refunds $240. Then you rewind it
+to step 2 with your correction, "Max 10% credit. Never cancel without asking." The rewind does three things:
 
 - the cancel and the $3,000 credit are undone (newest first)
 - the $240 refund is irreversible, so it's flagged, and the agent is told it already happened
 - the workflow is reset to step 2. Step 1 comes back from Temporal's history, and step 2 runs again with the
-  correction: a $200 credit, then it asks before cancelling
+  correction. The agent credits $200, mentions the refund already sent, and asks before cancelling
 
 ```
 python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python -m example.run          # Temporal UI on http://localhost:8233
+.venv/bin/python -m example.run
 ```
 
 The model is a scripted stand-in for an LLM (`model.py`), so every run is the same. The billing system is a fake
@@ -26,10 +26,10 @@ billing.py   the fake billing system the tools change
 run.py       runs the agent, rewinds it, prints both runs
 ```
 
-## What Rewind adds to a normal agent
+## What Rewind changes in your agent
 
-Without Rewind, this is the agent you'd write: the model call and each tool are activities. With Rewind, the tools
-become plain functions, and Rewind turns each one into an activity named after it (`add_credit`), plus an undo
+Without Rewind, this is the agent you'd write, with the model call and each tool as activities. With Rewind, the
+tools become plain functions, and Rewind turns each one into an activity named after it (`add_credit`), plus an undo
 activity for each reversible tool (`undo_add_credit`). In the Temporal UI they look like any other activity.
 
 **The workflow** runs the model and tool calls through two helpers, so they get activity IDs a rewind can find
@@ -61,11 +61,10 @@ activity for each reversible tool (`undo_add_credit`). In the Temporal UI they l
 +    return {**llm(SYSTEM_PROMPT, messages, TOOLS, corrections), "corrections": corrections}
 ```
 
-**Each tool** swaps `@activity.defn` for a Rewind decorator that says what kind it is. A reversible tool also says how
-to read the state it changes and how to undo it. A rewind only undoes an effect if that state still matches what the
-tool left. Otherwise it has drifted (someone else changed it), and it's flagged instead. `state` is optional. Without
-it, the undo always runs. These tools skip idempotency keys to stay short. A real tool should take one, so a retry doesn't apply
-twice.
+**Each tool** swaps `@activity.defn` for a Rewind decorator that says what kind it is. A reversible tool also gets an
+`undo`, and optionally a `state` that reads what the tool changes. A rewind only undoes the effect if that state still
+matches what the tool left. If someone else has changed it (drift), the effect is flagged instead. These tools skip
+idempotency keys to stay short. A real tool should take one, so a retry doesn't apply twice.
 
 ```diff
 +def _balance(args):
@@ -82,7 +81,8 @@ twice.
 ```
 
 **The worker** registers Rewind's workflow and activities next to yours. `rewind.ACTIVITIES` includes the tool
-activities, so the tools aren't listed one by one. Import them before reading it.
+activities, so the tools aren't listed one by one. Import your tools before reading
+`rewind.ACTIVITIES`, as `worker.py` does.
 
 ```diff
 -Worker(client, task_queue=TASK_QUEUE, workflows=[SupportAgent],
@@ -100,6 +100,6 @@ result = await rewind.rewind(client, "support-ticket-42", 2, "Max 10% credit. Ne
 ```
 
 The rewind runs as a Temporal workflow with the ID `rewind:support-ticket-42`. It undoes the effects, saves the
-correction, and resets the agent's workflow to step 2's model call. The reset keeps the workflow ID, so in the Temporal UI you'll see
-two runs of `support-ticket-42`: the original and the rewound one. The rewind's own history shows the undos it ran:
-`undo_cancel_subscription`, then `undo_add_credit`.
+correction, and resets the agent's workflow to step 2's model call. The reset keeps the workflow ID, so in the Temporal
+UI you'll see two runs of `support-ticket-42`: the original and the rewound one. The rewind's own history shows the
+undos it ran: `undo_cancel_subscription`, then `undo_add_credit`.

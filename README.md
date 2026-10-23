@@ -13,6 +13,9 @@ mistake never happened.
 The UI in the video is a mockup on scripted data. The example below runs the real library on a local Temporal
 server.
 
+For an in-depth look at each step, the design decisions and what I learned about Temporal's reset, check out
+[How Rewind works](docs/how-it-works.md).
+
 ## The problem
 
 When an agent fails, it usually doesn't crash. It finishes and does the wrong thing: it issues a $3,000 credit
@@ -36,9 +39,6 @@ world, and fixing it by hand means undoing each change and then redoing the work
 
 `example/` is a small support agent you can run in a minute. It makes a costly mistake, and the script rewinds it on
 a local Temporal server so you can see each part of a rewind.
-
-You need Python 3.10 or later. The script starts its own Temporal server, with the UI on http://localhost:8233, and
-keeps it running until you press Ctrl-C.
 
 ```
 git clone https://github.com/Zach-Fong/rewind.git && cd rewind
@@ -165,6 +165,5 @@ and Temporal's history is what makes going back cheap for the agent.
 - Irreversible effects are flagged and reported, not undone.
 - The ledger is a local SQLite file shared by the worker and the client.
 
-The full list, including what can never be done, is in
-[docs/DESIGN.md](docs/DESIGN.md#limits), along with how it works and what building it taught me
-about Temporal's reset.
+The full list, including what can never be done, is in [How Rewind works](docs/how-it-works.md#limits), with the design
+decisions and what building Rewind taught me about Temporal's reset.

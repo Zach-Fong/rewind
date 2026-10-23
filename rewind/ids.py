@@ -1,4 +1,4 @@
-"""Every ID and name Rewind builds, in the same order as the Identifiers table in docs/DESIGN.md.
+"""Every ID and name Rewind builds, in the same order as the Identifiers table in docs/how-it-works.md.
 
 This file only imports `hashlib`, so workflow code can import it safely.
 """

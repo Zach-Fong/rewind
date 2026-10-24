@@ -8,7 +8,7 @@ mistake never happened.
 
 ## Demo
 
-**Video:** [link]
+https://github.com/user-attachments/assets/d0d30477-9aa3-45de-92c0-338815d206a8
 
 The UI in the video is a mockup on scripted data. The example below runs the real library on a local Temporal
 server.

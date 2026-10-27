@@ -7,7 +7,7 @@ to run the agent again from that step, with your correction. The agent keeps its
 mistake never happened.
 
 ## Demo
-https://github.com/user-attachments/assets/360713fc-0063-4416-a75e-f55aae1478bb
+https://github.com/user-attachments/assets/2ab747be-00c2-46d8-8cce-ac8348f8064a
 
 The UI in the video is a mockup on scripted data. The example below runs the real library on a local Temporal
 server.

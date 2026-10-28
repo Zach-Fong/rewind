@@ -230,6 +230,11 @@ your API.
 `tests/check_tools.py` runs without Temporal and calls the recording code directly. `tests/check_rewind.py` starts its
 own dev server and runs the testbed's support agent on several tickets.
 
+```
+.venv/bin/python tests/check_tools.py
+.venv/bin/python tests/check_rewind.py
+```
+
 | What | How it's checked |
 |---|---|
 | Recording | Read-only tools aren't recorded. Reversible tools are, with their before and after state, and irreversible tools are flagged |

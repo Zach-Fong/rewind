@@ -98,16 +98,6 @@ The model, the billing system and the outbox are mocks, so every run is the same
 In the Temporal UI you'll find the original and rewound runs (both under `support-ticket-42`) and the rewind itself
 (`rewind:support-ticket-42`).
 
-## Tests
-
-```
-.venv/bin/python tests/check_tools.py     # no Temporal: recording, idempotency, undo, drift, corrections
-.venv/bin/python tests/check_rewind.py    # starts its own Temporal dev server: rewind, preview, drift, repeat rewinds, refusals, failed undos, reused IDs
-```
-
-Plain scripts, not pytest: each prints PASS or FAIL per check. Both run against `tests/testbed/`, a support agent on
-a fake Stripe, a fake outbox and a scripted model.
-
 ## Limitations
 
 - Only finished workflows (anything but running) can be rewound.

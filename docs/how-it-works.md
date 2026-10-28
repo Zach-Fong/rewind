@@ -121,9 +121,9 @@ own IDs.
 | Agent workflow ID | yours | `support-ticket-42` | Stays the same across rewinds |
 | Run ID | Temporal's | `01a1…` | Changes on every reset, which separates the original run from rewound runs |
 | First run ID | Temporal's `first_execution_run_id` (`first_run_id` in the code) | `01a1…` | Same across resets, so a repeat rewind sees every run's effects. A new workflow started with the same ID starts empty |
-| Model call activity ID | `{step}.model` | `2.model` | How a rewind finds step M in history. It's the same in the rewound run |
-| Tool call activity ID | `{step}.{tool}.{i}` | `3.refund.1` | Unique per call in a step, and the same in the rewound run |
-| Idempotency key | `{workflow_id}:{run_id}:{activity_id}` | `support-ticket-42:01a1…:2.add_credit.0` | The same across retries of one call, and different in a rewound run |
+| Model call activity ID | `{step}.model` | `3.model` | How a rewind finds step M in history. It's the same in the rewound run |
+| Tool call activity ID | `{step}.{tool}.{i}` | `4.refund.1` | Unique per call in a step, and the same in the rewound run |
+| Idempotency key | `{workflow_id}:{run_id}:{activity_id}` | `support-ticket-42:01a1…:3.add_credit.0` | The same across retries of one call, and different in a rewound run |
 | Effect ID | `eff_` + hash of the key | `eff_9c1e…` | One ledger row per tool call, however often it's retried |
 | Undo key | `undo:{effect_id}` | `undo:eff_9c1e…` | Each undo applied at most once |
 | Rewind workflow ID | `rewind:{workflow_id}` | `rewind:support-ticket-42` | At most one rewind of an agent at a time |
@@ -170,7 +170,7 @@ Tested on Temporal Server 1.32.0 (CLI 1.9.1 dev server), Python SDK `temporalio`
 | Feature | What it would do |
 |---|---|
 | A signal as a `PostResetOperation` | Reset and send the correction in one step, with no race, even on completed runs |
-| Reset to an activity ID | Reset to "the activity with ID `2.model`" instead of computing a workflow-task boundary from event IDs |
+| Reset to an activity ID | Reset to "the activity with ID `3.model`" instead of computing a workflow-task boundary from event IDs |
 | Wait for running activities, then reset | A reset mode that waits for or cancels in-flight activities, so late changes can't escape the new history |
 | A run-aware idempotency token | A stable `(run_id, activity_id)` token in activity info, documented as safe across resets |
 | Reset lineage in the UI | Show the original run, the reset and the rewound run as a fork, with a "rewind with correction" action |

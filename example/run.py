@@ -1,4 +1,4 @@
-"""Run the agent, then rewind it to step 2 with a correction. Temporal UI on :8233.
+"""Run the agent, then rewind it to step 3 with a correction. Temporal UI on :8233.
 
 Usage: python -m example.run [--address localhost:7233]
 """
@@ -26,7 +26,7 @@ os.environ.setdefault("REWIND_DB", f"{_data}/rewind.db")  # Rewind: where it rec
 WORKFLOW_ID = "support-ticket-42"
 UI_PORT = 8233
 UI = f"http://localhost:{UI_PORT}"
-STEP = 2
+STEP = 3
 TICKET = "Your service failed us twice this week and nobody answers. Fix this NOW or we walk."
 CORRECTION = "Max 10% credit. Never cancel without asking."
 
@@ -37,9 +37,12 @@ def dollars(cents: int) -> str:
 
 def show_customer() -> None:
     customer = billing.get(billing.CUSTOMER)
+    discount = f"{customer['discount_percent']}%"
     credit = dollars(customer["balance_cents"])
     refunded = dollars(customer["refunded_cents"])
-    print(f"  billing: credit {credit} · cancelled {customer['cancelled']} · refunded {refunded}\n")
+    print(f"  billing: discount {discount} · credit {credit} · cancelled {customer['cancelled']} · refunded {refunded}")
+    replies = [reply["body"] for reply in billing.OUTBOX if reply["status"] == "scheduled"]
+    print(f"  scheduled reply: {replies[-1] if replies else 'none'}\n")
 
 
 def show_effects(title: str, effects: list) -> None:
@@ -63,8 +66,7 @@ async def demo(client: Client) -> None:
         id=WORKFLOW_ID,
         task_queue=TASK_QUEUE,
     )
-    reply = await handle.result()  # Rewind needs a finished workflow
-    print(f"  reply: {reply}")
+    await handle.result()  # Rewind needs a finished workflow
     show_customer()
 
     # 2. Preview the rewind
@@ -88,8 +90,7 @@ async def demo(client: Client) -> None:
 
     print(f"  the agent re-runs from step {STEP}:")
     rewound_run = client.get_workflow_handle(WORKFLOW_ID, run_id=result.rewound_run_id)
-    reply = await rewound_run.result()
-    print(f"  reply: {reply}")
+    await rewound_run.result()
     show_customer()
 
     print("In Temporal:")

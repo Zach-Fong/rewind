@@ -1,4 +1,5 @@
-"""A tiny fake billing system, like Stripe: one customer table in a SQLite file at `BILLING_DB`.
+"""A tiny fake billing system, like Stripe: one customer table in a SQLite file at `BILLING_DB`. Plus an outbox, a
+list where replies wait until 9 AM tomorrow.
 
 This is the "real world" the agent changes. It knows nothing about Rewind.
 """
@@ -20,7 +21,8 @@ CREATE TABLE customers (
     last_charge_cents INT,
     balance_cents     INT,
     cancelled         INT,
-    refunded_cents    INT
+    refunded_cents    INT,
+    discount_percent  INT
 );
 """
 
@@ -42,7 +44,7 @@ def seed() -> None:
     with closing(_db()) as conn:
         conn.executescript(SCHEMA)
     customer = (CUSTOMER, "Northwind Freight", 200000, 24000)
-    _execute("INSERT INTO customers VALUES (?, ?, ?, ?, 0, 0, 0)", *customer)
+    _execute("INSERT INTO customers VALUES (?, ?, ?, ?, 0, 0, 0, 0)", *customer)
 
 
 def get(customer_id: str) -> dict:
@@ -60,9 +62,26 @@ def add_balance(customer_id: str, cents: int) -> None:
     _execute("UPDATE customers SET balance_cents = balance_cents + ? WHERE id = ?", cents, customer_id)
 
 
+def set_discount(customer_id: str, percent: int) -> None:
+    _execute("UPDATE customers SET discount_percent = ? WHERE id = ?", percent, customer_id)
+
+
 def set_cancelled(customer_id: str, cancelled: bool) -> None:
     _execute("UPDATE customers SET cancelled = ? WHERE id = ?", int(cancelled), customer_id)
 
 
 def refund(customer_id: str, cents: int) -> None:
     _execute("UPDATE customers SET refunded_cents = refunded_cents + ? WHERE id = ?", cents, customer_id)
+
+
+OUTBOX: list[dict] = []
+
+
+def schedule_reply(customer_id: str, body: str) -> int:
+    """Returns the message ID."""
+    OUTBOX.append({"customer_id": customer_id, "body": body, "status": "scheduled"})
+    return len(OUTBOX) - 1
+
+
+def cancel_reply(message_id: int) -> None:
+    OUTBOX[message_id]["status"] = "cancelled"

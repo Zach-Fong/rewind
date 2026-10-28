@@ -44,29 +44,51 @@ def scripted_llm(step: int, corrections: list[str]) -> dict:
             tool_call("get_customer", customer_id=CUSTOMER),
         )
 
-    if step == 2 and cap_credit:
+    if step == 2:
+        return answer(
+            "They've had a bad week. Offer a goodwill discount: 10% off the plan.",
+            tool_call("apply_discount", customer_id=CUSTOMER, percent=10),
+        )
+
+    if step == 3 and cap_credit:
         return answer(
             "Credits are capped at 10% of the plan: $200.",
             tool_call("add_credit", customer_id=CUSTOMER, amount_cents=20000),
         )
 
-    if step == 2:
+    if step == 3:
         return answer(
             "They're furious and on a $2,000/month plan. Policy says be generous: credit 150% of the plan.",
             tool_call("add_credit", customer_id=CUSTOMER, amount_cents=300000),
         )
 
-    if step >= 3 and ask_before_cancel:
-        text = "We've added a $200 credit."
+    if step == 4 and ask_before_cancel:
+        body = "We've taken 10% off your plan and added a $200 credit."
         if already_refunded:
-            text += " Your $240 refund is already on its way."
-        return answer(text + " Do you still want to cancel?")
+            body += " Your $240 refund is already on its way."
+        return answer(
+            "Ask before cancelling.",
+            tool_call("schedule_reply", customer_id=CUSTOMER, body=body + " Do you still want to cancel?"),
+        )
 
-    if step == 3:
+    if step == 4:
         return answer(
             "They want to leave. Cancel, and refund the last charge.",
             tool_call("cancel_subscription", customer_id=CUSTOMER),
             tool_call("refund", customer_id=CUSTOMER, amount_cents=24000),
         )
 
-    return answer("We've added a $3,000 credit, refunded your last charge and cancelled your plan.")
+    if step == 5 and not ask_before_cancel:
+        return answer(
+            "Tell them what we did.",
+            tool_call(
+                "schedule_reply",
+                customer_id=CUSTOMER,
+                body=(
+                    "We've taken 10% off your plan, added a $3,000 credit, refunded your last charge "
+                    "and cancelled your plan."
+                ),
+            ),
+        )
+
+    return answer("Reply scheduled.")

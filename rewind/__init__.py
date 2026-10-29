@@ -1,7 +1,7 @@
 """Rewind: undo what an AI agent did in the real world, then run it again from the step where it went wrong.
 
     @rewind.read_only / reversible / irreversible   on your tools
-    rewind.agent_workflow                           in your agent workflow: model_call and tool_calls
+    rewind.model_call / tool_calls                  in your agent workflow
     await rewind.corrections(step)                  in your model activity
     rewind.WORKFLOWS / ACTIVITIES                   on your worker, after your tools are imported
     rewind.preview / rewind.rewind                  from your own code
@@ -13,6 +13,7 @@ Every ID and activity name is built in `ids.py`.
 
 from rewind import agent_activities, rewind_activities
 from rewind.agent_activities import corrections
+from rewind.agent_workflow import model_call, tool_calls
 from rewind.client import Plan, RewindError, RewindResult, preview, rewind
 from rewind.ids import rewind_workflow_id
 from rewind.ledger import Effect, Ledger
@@ -29,11 +30,13 @@ __all__ = [
     "RewindResult",
     "corrections",
     "irreversible",
+    "model_call",
     "preview",
     "read_only",
     "reversible",
     "rewind",
     "rewind_workflow_id",
+    "tool_calls",
 ]
 
 WORKFLOWS = [RewindWorkflow]

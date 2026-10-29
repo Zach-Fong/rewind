@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "Zach Fong" }]
 requires-python = ">=3.10"
-dependencies = ["temporalio==1.34.0"]
+dependencies = ["temporalio>=1.34,<2"]
 
 [project.optional-dependencies]
 dev = ["ruff==0.12.7"]

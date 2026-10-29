@@ -14,9 +14,8 @@ The callbacks:
 
 `effect` is the ledger row (`rewind.Effect`), with `.args`, `.before`, `.after` and `.result`.
 
-A tool is recorded when it runs as an activity through `rewind.agent_workflow.tool_calls`, not when you call the
-function directly. A tool with an `idempotency_key` parameter gets a key that stays the same across retries and
-changes after a rewind.
+A tool is recorded when it runs as an activity through `rewind.tool_calls`, not when you call the function directly.
+A tool with an `idempotency_key` parameter gets a key that stays the same across retries and changes after a rewind.
 """
 
 from __future__ import annotations
@@ -90,7 +89,14 @@ TOOLS: dict[str, Tool] = {}
 def _register(tool: Tool) -> Callable:
     if inspect.iscoroutinefunction(tool.fn):
         raise TypeError(f"{tool.name}: async tools aren't supported yet. Make it a plain function")
-    if tool.name in TOOLS:
+    existing = TOOLS.get(tool.name)
+    if existing is not None:
+        # Temporal's sandbox imports a workflow file's imports again. If that file imports the tools while `rewind`
+        # is passed through, each tool registers a second time. That's the same tool, so the first copy is kept.
+        same_module = existing.fn.__module__ == tool.fn.__module__
+        same_name = existing.fn.__qualname__ == tool.fn.__qualname__
+        if same_module and same_name:
+            return tool.fn
         raise ValueError(f"a tool named {tool.name!r} is already registered")
     TOOLS[tool.name] = tool
     return tool.fn

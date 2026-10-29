@@ -1,5 +1,7 @@
-"""Library checks without Temporal: tool recording, idempotency, undo, drift, corrections, plus the test bed's fake
-Stripe semantics. Throwaway DBs. Usage: .venv/bin/python tests/check_tools.py
+"""Checks the library without Temporal: tool recording, idempotency, undo, drift and corrections. It also checks how
+the test bed's fake Stripe behaves. Each run uses throwaway databases.
+
+Usage: .venv/bin/python tests/check_tools.py
 """
 
 from __future__ import annotations
@@ -211,6 +213,10 @@ def main() -> int:
     check(
         "registering a duplicate name or an async tool is refused", refused == ["ValueError", "TypeError"], str(refused)
     )
+
+    # the same function registering again, as it does when Temporal's sandbox re-imports the tools, keeps the first copy
+    rewind.read_only(support_tools.add_credit)
+    check("registering the same tool again keeps the first copy", tools.get_tool("add_credit").kind == "reversible")
 
     print("\nALL PASS" if not FAILS else f"\nFAILURES: {FAILS}")
     return 1 if FAILS else 0

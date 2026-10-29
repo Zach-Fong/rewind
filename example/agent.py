@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from temporalio import workflow
 
-from rewind import agent_workflow as rw  # Rewind
+import rewind  # Rewind
 
 with workflow.unsafe.imports_passed_through():
     from example.model import call_model
 
 MAX_STEPS = 10
+TIMEOUT = timedelta(seconds=60)
 
 
 @workflow.defn
@@ -20,7 +23,7 @@ class SupportAgent:
 
         for step in range(1, MAX_STEPS + 1):
             # Rewind: instead of workflow.execute_activity
-            reply = await rw.model_call(call_model, step, messages)
+            reply = await rewind.model_call(call_model, step, messages, start_to_close_timeout=TIMEOUT)
             messages.append(
                 {
                     "role": "assistant",
@@ -33,7 +36,7 @@ class SupportAgent:
                 return reply["text"]
 
             # Rewind: runs and records the tools
-            results = await rw.tool_calls(reply["tool_calls"], step)
+            results = await rewind.tool_calls(reply["tool_calls"], step, start_to_close_timeout=TIMEOUT)
             messages.append({"role": "tool", "content": results})
 
         return "Stopped: too many steps."

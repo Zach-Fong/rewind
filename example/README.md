@@ -57,11 +57,11 @@ The workflow runs the model and tool calls through two Rewind helpers instead of
 helpers give each call an activity ID that includes its step, so a rewind can find the step in history.
 
 ```diff
-+from rewind import agent_workflow as rw
++import rewind
 +
  for step in range(1, MAX_STEPS + 1):
 -    reply = await workflow.execute_activity(call_model, messages, start_to_close_timeout=TIMEOUT)
-+    reply = await rw.model_call(call_model, step, messages, start_to_close_timeout=TIMEOUT)
++    reply = await rewind.model_call(call_model, step, messages, start_to_close_timeout=TIMEOUT)
      messages.append({"role": "assistant", "content": reply["text"], "tool_calls": reply["tool_calls"]})
 
      if not reply["tool_calls"]:
@@ -72,7 +72,7 @@ helpers give each call an activity ID that includes its step, so a rewind can fi
 -        args = list(call["args"].values())
 -        tool_runs.append(workflow.execute_activity(call["name"], args=args, start_to_close_timeout=TIMEOUT))
 -    results = await asyncio.gather(*tool_runs)
-+    results = await rw.tool_calls(reply["tool_calls"], step, start_to_close_timeout=TIMEOUT)
++    results = await rewind.tool_calls(reply["tool_calls"], step, start_to_close_timeout=TIMEOUT)
      messages.append({"role": "tool", "content": results})
 ```
 
@@ -87,7 +87,7 @@ earlier, and adds them to the prompt. Returning them is optional.
 -    return llm(SYSTEM_PROMPT, messages, TOOLS)
 +async def call_model(step: int, messages: list[dict]) -> dict:
 +    corrections = await rewind.corrections(step)
-+    prompt = SYSTEM_PROMPT + "\n".join(corrections)
++    prompt = "\n\n".join([SYSTEM_PROMPT, *corrections])
 +    reply = llm(prompt, messages, TOOLS)
 +    return {**reply, "corrections": corrections}  # Returning them shows them in the Temporal UI.
 ```
@@ -103,7 +103,12 @@ Each tool swaps `@activity.defn` for one of Rewind's decorators:
 - `@rewind.irreversible()` for a tool a rewind can't undo. A rewind flags it.
 
 Rewind registers each tool as an activity named after it, plus an undo activity for a reversible one (`add_credit` and
-`undo_add_credit`).
+`undo_add_credit`). A tool also has to follow three rules:
+
+- Call it through `rewind.tool_calls`. Rewind only records those calls, so a tool you run with
+  `workflow.execute_activity` isn't undone.
+- Make it a plain function, not async. Rewind runs each tool in a thread.
+- Use plain JSON for its arguments, result and state. The ledger saves them as JSON.
 
 ```diff
 +def _credit_state(args: dict) -> int:
@@ -165,5 +170,6 @@ result = await rewind.rewind(
 
 ---
 
-For how a rewind finds the step, undoes effects and resets the workflow, and the design decisions behind it, read
-[How Rewind works](../docs/how-it-works.md).
+For how a rewind finds the step, undoes effects and resets the workflow, read
+[How Rewind works](../docs/how-it-works.md). For the design decisions behind it, read the
+[Design notes](../docs/design-notes.md).

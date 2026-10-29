@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from temporalio import workflow
 
-from rewind import agent_workflow as rw
+import rewind
 
 with workflow.unsafe.imports_passed_through():
     from testbed.model import call_model
@@ -27,12 +27,12 @@ class SupportAgent:
     async def run(self, ticket: int) -> dict:
         messages: list[dict] = [{"role": "user", "ticket": ticket}]
         for step in range(1, MAX_STEPS + 1):
-            reply = await rw.model_call(call_model, step, ticket, messages)
+            reply = await rewind.model_call(call_model, step, ticket, messages)
             messages.append(
                 {"role": "assistant", "step": step, "reasoning": reply["reasoning"], "tool_calls": reply["tool_calls"]}
             )
             if reply["tool_calls"]:
-                results = await rw.tool_calls(reply["tool_calls"], step)
+                results = await rewind.tool_calls(reply["tool_calls"], step)
                 messages.append(
                     {
                         "role": "tool",

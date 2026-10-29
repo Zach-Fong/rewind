@@ -4,8 +4,8 @@ A step is one model call plus the tool calls it asks for. The helpers give each 
 in history: `3.model` for step 3's model call, and `3.add_credit.0` for its first tool call. Each tool runs as an
 activity named after it.
 
-    reply = await rw.model_call(call_model, step, *args)       # your activity, which takes `step` first
-    results = await rw.tool_calls(reply["tool_calls"], step)   # runs [{"name", "args"}] in parallel
+    reply = await rewind.model_call(call_model, step, *args)       # your activity, which takes `step` first
+    results = await rewind.tool_calls(reply["tool_calls"], step)   # runs [{"name", "args"}] in parallel
 
 This file only imports Temporal and `rewind.ids`, and refers to activities by name, so it's safe in workflow code.
 """

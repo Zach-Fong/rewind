@@ -10,7 +10,7 @@ The callbacks:
                                call. A rewind undoes the effect only if it still equals the after-state.
                                Without it the undo always runs, which suits an undo of a relative change.
     undo(effect, key) -> Any   Reverses the effect. Pass `key` on to your API as the undo's idempotency key.
-    describe(effect) -> str    Optional. One line for the correction, such as "refund $240 to cus_4417".
+    describe(effect) -> str    Optional. One line for the correction, such as "refund $240 to cus_42".
 
 `effect` is the ledger row (`rewind.Effect`), with `.args`, `.before`, `.after` and `.result`.
 

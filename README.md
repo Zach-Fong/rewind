@@ -6,9 +6,8 @@ mistake never happened.
 
 https://github.com/user-attachments/assets/2ab747be-00c2-46d8-8cce-ac8348f8064a
 
-The UI in the video is a mockup on scripted data. The example below runs the real library on a local Temporal
-server. For an in-depth look at each step, check out [How Rewind works](docs/how-it-works.md). For the design
-decisions and what I learned about Temporal's reset, read the [Design notes](docs/design-notes.md).
+For each step of a rewind in depth, read [How Rewind works](docs/how-it-works.md). For the design decisions and
+what I learned about Temporal's reset, read the [Design notes](docs/design-notes.md).
 
 ## The problem
 

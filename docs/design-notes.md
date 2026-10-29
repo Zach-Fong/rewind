@@ -19,7 +19,7 @@ features that would make it native to Temporal. It uses the terms defined in [Ho
 
 | Finding | How I found it | What it changed in Rewind |
 |---|---|---|
-| A signal sent after a reset races the rewound run's first step, and Temporal can't reset and signal in one step | Reset a completed workflow, then signalled the rewound run. The signal reached step M's model call in 28 of 30 trials when sent at once, and in none when sent 50 ms later. The [server source](https://github.com/temporalio/temporal/tree/v1.32.0) shows `performPostResetOperations` only supports `UpdateWorkflowOptions` | Store the correction instead of signalling it |
+| A signal sent after a reset races the rewound run's first step, and Temporal can't reset and signal in one step | Reset a completed workflow, then signalled the rewound run. The signal reached step M's model call in 28 of 30 trials when sent at once, and in none when sent 50 ms later. The API defines a `SignalWorkflow` post-reset operation, but the [server source](https://github.com/temporalio/temporal/tree/v1.32.0) shows `performPostResetOperations` only carries out `UpdateWorkflowOptions` | Store the correction instead of signalling it |
 | Reset replays activity IDs, including custom ones, but run IDs change | Compared activity IDs in the original and rewound runs in `tests/check_rewind.py`. Read the activity counter in the [SDK source](https://github.com/temporalio/sdk-python/tree/1.34.0) (`temporalio/worker/_workflow_instance.py`) | Reset to a model call, found by its `{step}.model` ID. Put the run ID in the idempotency key |
 | Reset doesn't stop work in flight | Reset while an activity was running. It still made its change, but the server rejected its result, so the change never appeared in the new history | Only finished workflows can be rewound |
 | A reset can reapply signals, but only every signal or none. A correction signalled to the original run comes through, but so does every other signal sent after the reset point. Only an open run can be signalled at all | Signalled the original run, then reset with signal reapply. The signal was handled first in 20 of 20 trials. A `pause` sent earlier came back too, and the rewound run started paused | Rewind resets with no signals or updates reapplied, so any sent after step M are lost |
@@ -68,7 +68,7 @@ Tested on Temporal Server 1.32.0 (CLI 1.9.1 dev server), Python SDK `temporalio`
 
 | Feature | What it would do |
 |---|---|
-| A signal as a `PostResetOperation` | Reset and send the correction in one step, with no race, even on completed runs |
+| Server support for the `SignalWorkflow` post-reset operation | The API already defines it. Supporting it would let a reset send the correction in the same step, with no race, even on completed runs |
 | Reset to an activity ID | Reset to "the activity with ID `3.model`" instead of computing a workflow-task boundary from event IDs |
 | Wait for running activities, then reset | A reset mode that waits for or cancels in-flight activities, so late changes can't escape the new history |
 | A run-aware idempotency token | A stable `(run_id, activity_id)` token in activity info, documented as safe across resets |

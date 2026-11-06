@@ -21,7 +21,8 @@ corrections, and asks Temporal to do the rest.
 Your agent keeps the usual Temporal loop. It calls the model, runs the tools the model asks for, adds the results to
 the conversation, and repeats until the model answers. Two helpers make that loop rewindable. `rewind.model_call`
 runs the model activity with the ID `{step}.model`, and `rewind.tool_calls` runs each tool in parallel as an
-activity named after it, with the ID `{step}.{tool}.{i}`.
+activity named after it, with the ID `{step}.{tool}.{i}`. Rewind's plugin adds those tool activities to your worker,
+along with the rewind workflow and its activities.
 
 A read-only tool just runs. A reversible or irreversible tool changes something in the world, so Rewind records each
 call to it as an effect. An effect is a row in the ledger with the call, its before and after state, and its result.
@@ -36,7 +37,8 @@ Rewind records it in this order:
 ## A rewind
 
 Only a finished agent workflow (anything but running) can be rewound. `rewind.rewind()` starts the
-`rewind:{workflow_id}` workflow on the agent's task queue. That workflow does four things:
+`rewind:{workflow_id}` workflow on the agent's task queue. That workflow does four things. Its `phase` query and the
+current details in the Temporal UI show where it is: planning, undoing, resetting or done.
 
 1. **Plan.** Rewind calls `rewind.preview()`, which finds step M's model call in the agent's history. That sets the
    reset point: the moment just before that call. It then reads every effect from step M on, from the original

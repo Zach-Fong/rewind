@@ -43,14 +43,20 @@ class RewindWorkflow:
         """Where the rewind is: planning, undoing, resetting or done."""
         return self._phase
 
+    def _set_phase(self, phase: str) -> None:
+        """Record where the rewind is, for the `phase` query and as the current details the Temporal UI shows."""
+        self._phase = phase
+        workflow.set_current_details(f"Rewind phase: {phase}")
+
     @workflow.run
     async def run(self, workflow_id: str, step: int, correction: str) -> dict:
         # 1. Plan. The activity returns `Plan.to_dict()`, so `plan` has the fields of `rewind.client.Plan`.
+        self._set_phase("planning")
         plan = await _run_activity(ids.PREVIEW_ACTIVITY, workflow_id, step)
 
         # 2. Undo, newest first. Effects the plan saw as drifted are tried too, because the undo activity checks
         # drift again and flags them if they're still drifted.
-        self._phase = "undoing"
+        self._set_phase("undoing")
         to_try = sorted(plan["to_undo"] + plan["drifted"], key=lambda effect: effect["seq"], reverse=True)
         undone = []
         for effect in to_try:
@@ -62,11 +68,11 @@ class RewindWorkflow:
 
         # 3 and 4. Save the correction and reset the agent. The rewind's run ID identifies it, so a retried save
         # or reset isn't applied twice.
-        self._phase = "resetting"
+        self._set_phase("resetting")
         rewind_id = workflow.info().run_id
         reset_result = await _run_activity(ids.RESET_ACTIVITY, rewind_id, plan, correction)
 
-        self._phase = "done"
+        self._set_phase("done")
         # The shape RewindResult.from_dict reads.
         return {
             "rewind_id": rewind_id,

@@ -91,7 +91,7 @@ def run_and_record(
 def tool_activities() -> list:
     """Build one activity per registered tool."""
     if not tools.TOOLS:
-        raise RuntimeError("no tools registered: import your tools before reading rewind.ACTIVITIES")
+        raise RuntimeError("no tools registered: import your tools before building the worker")
     return [tool_activity(tool) for tool in tools.TOOLS.values()]
 
 

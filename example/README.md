@@ -44,7 +44,7 @@ runs the agent's workflow, then calls the rewind.
 | `model.py` | The model call, scripted so every run is the same |
 | `tools.py` | The agent's tools, each with a Rewind decorator |
 | `billing.py` | A fake billing system and outbox |
-| `worker.py` | Runs the agent's workflow and activities, plus Rewind's |
+| `worker.py` | Runs the agent's workflow and activities, with Rewind's plugin |
 | `run.py` | Runs the agent, then rewinds it |
 
 ## Adding Rewind
@@ -102,8 +102,8 @@ Each tool swaps `@activity.defn` for one of Rewind's decorators:
   instead of undoing it.
 - `@rewind.irreversible()` for a tool a rewind can't undo. A rewind flags it.
 
-Rewind registers each tool as an activity named after it, plus an undo activity for a reversible one (`add_credit` and
-`undo_add_credit`). A tool also has to follow three rules:
+Rewind's plugin adds each tool to your worker as an activity named after it, plus an undo activity for a reversible
+one (`add_credit` and `undo_add_credit`). A tool also has to follow three rules:
 
 - Call it through `rewind.tool_calls`. Rewind only records those calls, so a tool you run with
   `workflow.execute_activity` isn't undone.
@@ -132,17 +132,19 @@ apply twice. An undo gets its own `key` for the same reason.
 
 ### The worker (`worker.py`)
 
-The worker registers Rewind's workflow and activities next to yours. `rewind.ACTIVITIES` includes an activity for each
-tool, so import your tools first.
+Rewind is a Temporal plugin. It adds its workflow and activities to your worker, including an activity for each
+tool, so import your tools before you build the worker. It also passes `rewind` through Temporal's workflow sandbox,
+so the sandbox doesn't import it again for every run. Pass the plugin to the worker or to `Client.connect`, not both,
+or the worker registers Rewind's activities twice and fails to start.
 
 ```diff
  Worker(
      client,
      task_queue=TASK_QUEUE,
--    workflows=[SupportAgent],
+     workflows=[SupportAgent],
 -    activities=[call_model, get_customer, apply_discount, add_credit, cancel_subscription, schedule_reply, refund],
-+    workflows=[SupportAgent, *rewind.WORKFLOWS],
-+    activities=[call_model, *rewind.ACTIVITIES],
++    activities=[call_model],
++    plugins=[rewind.RewindPlugin()],
  )
 ```
 

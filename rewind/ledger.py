@@ -106,17 +106,23 @@ def _effect(row: sqlite3.Row) -> Effect:
 
 class Ledger:
     def __init__(self, path: str | None = None):
+        # Creating a Ledger doesn't touch its SQLite file. Async activities create one on the event loop, where
+        # blocking I/O would stall the worker.
         self.path = path or os.environ.get("REWIND_DB", "rewind.db")
-        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-        with self._connect() as conn:
-            conn.executescript(SCHEMA)
+        self._has_schema = False
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        """Open a connection with a busy timeout, so the worker and your scripts can share the file."""
+        """Open a connection to the SQLite file at `self.path`, with a busy timeout so the worker and your scripts
+        can share it. The first connection also creates the file, its folder and its tables."""
+        if not self._has_schema:
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         conn = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         conn.row_factory = sqlite3.Row
         try:
+            if not self._has_schema:
+                conn.executescript(SCHEMA)
+                self._has_schema = True
             yield conn
         finally:
             conn.close()

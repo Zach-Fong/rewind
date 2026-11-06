@@ -29,7 +29,6 @@ from temporalio.client import Client
 from temporalio.converter import PayloadConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
-from temporalio.worker import Worker
 
 import rewind
 import testbed
@@ -373,7 +372,9 @@ async def scenario_g(client: Client) -> None:
 
 async def main() -> int:
     async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(env.client, task_queue=TQ, workflows=testbed.WORKFLOWS, activities=testbed.ACTIVITIES):
+        # With no workflow cache, every workflow task replays the run from the start, so each scenario also checks
+        # that the agent and the rewind replay cleanly.
+        async with testbed.make_worker(env.client, max_cached_workflows=0):
             for scenario in (scenario_a_b_d, scenario_c, scenario_e, scenario_f, scenario_g):
                 await scenario(env.client)
     print("\nALL PASS" if not FAILS else f"\nFAILURES: {FAILS}")

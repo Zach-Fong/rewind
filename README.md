@@ -1,8 +1,8 @@
 # Rewind: an undo button for AI agents on Temporal
 
-Rewind undoes the real-world changes your agent made from the step where it went wrong. Then it uses Temporal's reset
-to run the agent again from that step, with your correction. The agent keeps its earlier work and carries on as if the
-mistake never happened.
+Rewind is a Temporal plugin that undoes your agent's mistakes in the real world. It undoes changes the agent made from
+the step where it went wrong. Then it re-runs the agent from that step with your correction, using Temporal's
+reset. The agent keeps its earlier work and carries on as if the mistake never happened.
 
 https://github.com/user-attachments/assets/2ab747be-00c2-46d8-8cce-ac8348f8064a
 
